@@ -108,7 +108,7 @@ bash prepare/download_pretrained_models.sh
 
 
 <details>
-  <summary><b> 5. Prepare the datasets </b></summary>
+  <summary><b> 4. Prepare the datasets </b></summary>
   Comming Soon!
   The dataset structure will be like:
 
