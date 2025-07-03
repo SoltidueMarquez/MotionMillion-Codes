@@ -85,7 +85,7 @@ matplotlib==3.4.3
 matplotlib-inline==0.1.2
 mdurl==0.1.2
 mkl-fft==1.3.0
-mkl-random @ file:///tmp/build/80754af9/mkl_random_1626186064646/work
+mkl-random
 mkl-service==2.4.0
 modelscope==1.23.1
 moviepy==1.0.3
@@ -176,7 +176,7 @@ seaborn==0.13.2
 sentence-transformers==3.2.1
 sentencepiece==0.2.0
 shellingham==1.5.4
-six @ file:///tmp/build/80754af9/six_1623709665295/work
+six
 sklearn==0.0
 smart-open==7.0.5
 smplx==0.1.28

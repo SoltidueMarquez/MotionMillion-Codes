@@ -60,7 +60,7 @@ We test our code on Python 3.8.11 and PyTorch 2.4.1.
   <summary><b> 2. Dependencies </b></summary>
 
 <!-- <details> -->
-  <summary><b>🥳  Run the following command to install [`git-lfs`](https://git-lfs.com/)</b></summary>
+  <summary><b>🥳  Run the following command to install git-lfs</b></summary>
 
 ```
 conda install conda-forge::git-lfs
