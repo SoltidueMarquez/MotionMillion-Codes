@@ -393,7 +393,7 @@ def evaluation_vqvae_motionmillion(out_dir, train_loader, val_loader, net, logge
             pose = train_loader.dataset.transform(pose)
             
             pred_pose, _, perplexity, activate, indices = net(torch.from_numpy(pose).to(comp_device))
-            motion_indices.append(indices.squeeze())
+            motion_indices.append(indices.squeeze().cpu())
 
             pred_denorm = train_loader.dataset.inv_transform(pred_pose.detach().cpu().numpy())
             pred_xyz = torch.from_numpy(recover_from_local_position(pred_denorm.squeeze(), num_joints)).float().to(comp_device).unsqueeze(0)

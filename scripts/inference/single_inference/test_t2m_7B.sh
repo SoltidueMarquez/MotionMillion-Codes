@@ -8,7 +8,7 @@ python inference_single.py \
 --block-size 301 \
 --ff-rate 4 \
 --drop-out-rate 0.1 \
---resume-pth results/output/FSQ_96len/train_VQVAE_FSQ_bz64_lr5e-5_totaliter6000000_codebook65536_motionmillion_numworkers1_4gpu_online_96window-size_1down-t_3depth_3kernelsize_48000warmup_wavelet_1patch_layernorm/net_6000000.pth \
+--resume-pth ./checkpoints/pretrained_models/fsq_net_6000000.pth \
 --vq-name VQVAE_codebook_65536_FSQ_all \
 --out-dir results/output/inference/single_inference/ \
 --total-iter 120000 \
@@ -35,7 +35,7 @@ python inference_single.py \
 --mixed_precision bf16 \
 --use_rewrite_model \
 --rewrite_model_path ./checkpoints/rewrite_models/Meta-Llama-3.1-8B-Instruct \
---resume-trans /cpfs04/user/fanke/open_code/MotionMillion/results/output/T2M/600iterFSQ/train_motionmillion_GPT_vqvae_65536_FSQ_pkeep_1_llama_7B_t5_xl_each_word_unigram_bf16_iter24w_bs16_8gpu_5machine_numworkers0_lr4e-4_gradacc1_cos-sched/net_240000.pth
+--resume-trans ./checkpoints/pretrained_models/motionmillion_7B_all.pth
 
 # --print-iter 1 \
 # --eval-metric-iter 1 \

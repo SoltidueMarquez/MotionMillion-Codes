@@ -155,6 +155,8 @@ bash scripts/inference/single_inference/test_t2m_7B.sh
 ```
 please remind to replace the `${resume-pth}` and the `${resume-trans}` to the real path of your tokenizer and t2m model.
 
+We follow the manner of video/image generation, using LLAMA3.1-8B as our rewrite model to rewrite the input prompt. If you don't want to use rewrite model, simply delete `${use_rewrite_model}` and `${rewrite_model_path}`.
+
 If you want to test our MotionMillion-Eval benchmark, please run the following commands:
 
 ```

@@ -9,7 +9,7 @@ accelerate launch --num_processes 1 train_t2m_get_codes.py \
 --block-size 301 \
 --ff-rate 4 \
 --drop-out-rate 0.1 \
---resume-pth results/output/FSQ_96len/train_VQVAE_FSQ_bz64_lr5e-5_totaliter6000000_codebook65536_motionmillion_numworkers1_4gpu_online_96window-size_1down-t_3depth_3kernelsize_48000warmup_wavelet_1patch_layernorm/net_6000000.pth \
+--resume-pth checkpoints/pretrained_models/fsq_net_6000000.pth \
 --vq-name VQVAE_codebook_65536_FSQ_all \
 --out-dir results/output/T2M/600iterFSQ \
 --total-iter 240000 \
