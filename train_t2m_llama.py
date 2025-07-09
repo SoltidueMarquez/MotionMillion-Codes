@@ -81,7 +81,7 @@ class WarmupConstantScheduler:
         # if in warm-up period, the learning rate increases linearly
         if current_iter < self.warmup_iters:
             return float(current_iter) / float(max(1, self.warmup_iters))
-        # after warm-up period, lambda = 1 (no more
+        # after warm-up period, lambda = 1
         return 1.0
 
     def step(self, current_iter):
