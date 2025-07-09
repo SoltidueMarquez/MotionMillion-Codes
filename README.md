@@ -1,9 +1,23 @@
-# Go to Zero: Towards Zero-shot Motion Generation with Million-scale Data
+<h2 align="center"<strong>Go to Zero: Towards Zero-shot Motion Generation with Million-scale Data</strong></h2>
 
-[Ke Fan](https://vankouf.github.io/)<sup>1</sup>, [Shunlin Lu](https://shunlinlu.github.io/)<sup>2</sup>, [Minyue Dai](https://jixiii.github.io/)<sup>3</sup>, [Runyi Yu](https://ingrid789.github.io/IngridYu/)<sup>4</sup>, [Lixing Xiao](https://li-xingxiao.github.io/homepage/)<sup>5</sup>, [Zhiyang Dou](https://frank-zy-dou.github.io/)<sup>6</sup>, [Junting Dong](https://jtdong.com/)<sup>7</sup>, [Lizhuang Ma](https://scholar.google.com/citations?user=yd58y_0AAAAJ&hl=zh-CN)<sup>1,8</sup>, [Jingbo Wang](https://wangjingbo1219.github.io/)<sup>7</sup>
+<p align="center">
+<a href='https://vankouf.github.io/' target='_blank'>Ke Fan</a><sup>1</sup>,
+<a href='https://shunlinlu.github.io/' target='_blank'>Shunlin Lu</a><sup>2</sup>,
+<a href='https://jixiii.github.io/' target='_blank'>Minyue Dai</a><sup>3</sup>,
+<a href='https://ingrid789.github.io/IngridYu/' target='_blank'>Runyi Yu</a><sup>4</sup>, <br>
+<a href='https://li-xingxiao.github.io/homepage/' target='_blank'>Lixing Xiao</a><sup>5</sup>,
+<a href='https://frank-zy-dou.github.io/' target='_blank'>Zhiyang Dou</a><sup>6</sup>,
+<a href='https://jtdong.com/' target='_blank'>Junting Dong</a><sup>7</sup>,
+<a href='https://scholar.google.com/citations?user=yd58y_0AAAAJ&hl=zh-CN' target='_blank'>Lizhuang Ma</a><sup>1,8†</sup>,
+<a href='https://wangjingbo1219.github.io/' target='_blank'>Jingbo Wang</a><sup>7</sup>
+</p>
 
-Shanghai Jiao Tong University<sup>1</sup>, The Chinese University of Hong Kong, Shenzhen<sup>2</sup>, Fudan University<sup>3</sup>, Hong Kong University of Science and Technology<sup>4</sup>, Zhejiang University<sup>5</sup>, The University of Hong Kong<sup>6</sup>, Shanghai AI Laboratory<sup>7</sup>, East China Normal University<sup>8</sup>.
-
+<p align="center">
+<sup>1</sup>Shanghai Jiao Tong University, <sup>2</sup>The Chinese University of Hong Kong, Shenzhen, <sup>3</sup>Fudan University, <sup>4</sup>Hong Kong University of Science and Technology, <br>
+<sup>5</sup>Zhejiang University, <sup>6</sup>The University of Hong Kong, <sup>7</sup>Shanghai AI Laboratory, <sup>8</sup>East China Normal University.<br>
+† Corresponding author <br>
+<strong>ICCV 2025</strong>
+</p>
 
 <p align="center">
   <a href=''>
