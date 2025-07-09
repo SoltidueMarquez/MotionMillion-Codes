@@ -98,7 +98,7 @@ bash prepare/download_T5-XL.sh
 <details>
   <summary><b> 3. Pretrained models </b></summary>
 
-Run the script to download the pre-trained models:
+We provide our 3B and 7B models trained on train.txt and all.txt respectively. Our 7B-all achieves the best zero-shot performance. Run the script to download the pre-trained models:
 
 ```
 bash prepare/download_pretrained_models.sh
