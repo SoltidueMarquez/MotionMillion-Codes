@@ -287,6 +287,6 @@ If you find this work useful, please consider citing our paper:
 
 ## 📚 License
 
-This work is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
+This work is licensed under a Apache License.
 
 If you have any question, please contact at Ke Fan and cc to Shunlin Lu Chen and Jingbo Wang.
