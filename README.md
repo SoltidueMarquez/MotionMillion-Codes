@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-<sup>1</sup>Shanghai Jiao Tong University, <sup>2</sup>The Chinese University of Hong Kong, Shenzhen, <sup>3</sup>Fudan University, <sup>4</sup>Hong Kong University of Science and Technology, <br>
-<sup>5</sup>Zhejiang University, <sup>6</sup>The University of Hong Kong, <sup>7</sup>Shanghai AI Laboratory, <sup>8</sup>East China Normal University.<br>
+<sup>1</sup>Shanghai Jiao Tong University, <sup>2</sup>CUHK, Shenzhen, <sup>3</sup>Fudan University, <sup>4</sup>HKUST, <br>
+<sup>5</sup>Zhejiang University, <sup>6</sup>HKU, <sup>7</sup>Shanghai AI Laboratory, <sup>8</sup>East China Normal University.<br>
 † Corresponding author <br>
 <strong>ICCV 2025</strong>
 </p>
