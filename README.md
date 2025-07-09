@@ -16,7 +16,7 @@
 <sup>1</sup>Shanghai Jiao Tong University, <sup>2</sup>CUHK, Shenzhen, <sup>3</sup>Fudan University, <sup>4</sup>HKUST, <br>
 <sup>5</sup>Zhejiang University, <sup>6</sup>HKU, <sup>7</sup>Shanghai AI Laboratory, <sup>8</sup>East China Normal University.<br>
 † Corresponding author <br>
-<strong>ICCV 2025</strong>
+<strong style="color:#0ea5e9;">ICCV 2025</strong>
 </p>
 
 <p align="center">
@@ -32,6 +32,8 @@
   <img src='https://img.shields.io/badge/GitHub-Code-black?style=flat&logo=github&logoColor=white'></a>
   <a href='https://youtu.be/5vfhTok6Mt0'>
   <img src='https://img.shields.io/badge/YouTube-Video-EA3323?style=flat&logo=youtube&logoColor=EA3323'></a>
+  <a href='https://www.bilibili.com/video/BV1cMGAzZEhA/'>
+  <img src='https://img.shields.io/badge/Bilibili-Video-4EABE6?style=flat&logo=Bilibili&logoColor=4EABE6'></a>
 </p>
 
 
