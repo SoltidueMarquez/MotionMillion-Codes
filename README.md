@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href=''>
+  <a href='https://arxiv.org/abs/2507.07095'>
   <img src='https://img.shields.io/badge/Arxiv-2404.19759-A42C25?style=flat&logo=arXiv&logoColor=A42C25'></a> 
-  <a href=''>
+  <a href='https://arxiv.org/pdf/2507.07095'>
   <img src='https://img.shields.io/badge/Paper-PDF-purple?style=flat&logo=arXiv&logoColor=yellow'></a> 
   <a href='https://vankouf.github.io/MotionMillion/'>
   <img src='https://img.shields.io/badge/Project-Page-%23df5b46?style=flat&logo=Google%20chrome&logoColor=%23df5b46'></a> 
@@ -276,12 +276,14 @@ We would like to thank the authors of the following repositories for their excel
 If you find this work useful, please consider citing our paper:
 
 ```bash
-@inproceedings{motionmillion,
-  title={Go to Zero: Towards Zero-shot Motion Generation with Million-scale Data},
-  author={},
-  booktitle={Arxiv},
-  pages={},
-  year={2025}
+@misc{fan2025zerozeroshotmotiongeneration,
+      title={Go to Zero: Towards Zero-shot Motion Generation with Million-scale Data}, 
+      author={Ke Fan and Shunlin Lu and Minyue Dai and Runyi Yu and Lixing Xiao and Zhiyang Dou and Junting Dong and Lizhuang Ma and Jingbo Wang},
+      year={2025},
+      eprint={2507.07095},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2507.07095}, 
 }
 ```
 
