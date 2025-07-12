@@ -291,4 +291,4 @@ If you find this work useful, please consider citing our paper:
 
 This work is licensed under a Apache License.
 
-If you have any question, please contact at Ke Fan and cc to Shunlin Lu Chen and Jingbo Wang.
+If you have any question, please contact at Ke Fan and cc to Shunlin Lu and Jingbo Wang.
