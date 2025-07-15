@@ -164,7 +164,11 @@ output_normalize_motion
 output_debug
 output_cfg_root_0.5_normalize_motion/
 draw
-dataset/MotionMillion
+dataset/MotionMillion/motion_data
+dataset/MotionMillion/texts
+dataset/MotionMillion/VQVAE*
+dataset/MotionMillion/split
+dataset/MotionMillion/all_data.pkl
 dataset/
 dataset/
 output
