@@ -16,7 +16,7 @@
 <sup>1</sup>Shanghai Jiao Tong University, <sup>2</sup>CUHK, Shenzhen, <sup>3</sup>Fudan University, <sup>4</sup>HKUST, <br>
 <sup>5</sup>Zhejiang University, <sup>6</sup>HKU, <sup>7</sup>Shanghai AI Laboratory, <sup>8</sup>East China Normal University.<br>
 † Corresponding author <br>
-<strong style="color:#0ea5e9;">ICCV 2025</strong>
+<strong style="color:#0ea5e9;">ICCV 2025</strong> <strong style="color:#e91e63;">Highlight</strong>
 </p>
 
 <p align="center">
