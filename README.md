@@ -46,7 +46,7 @@
 <!-- ## 🤼‍♂ Arena -->
 
 ## 📢 News
-- **[2025/07/26]** MotionMillion dataset is released.
+- **[2025/07/26] MotionMillion dataset is released.**
 - **[2025/07/24]** Our paper received the **Highlight** award at ICCV 2025.
 - **[2025/07/03]** Train code, Inference code and Model checkpoints are released.
 - **[2025/06/26]** MotionMillion is officially accepted by **ICCV 2025**.
