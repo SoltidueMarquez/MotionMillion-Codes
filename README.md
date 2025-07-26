@@ -26,7 +26,7 @@
   <img src='https://img.shields.io/badge/Paper-PDF-purple?style=flat&logo=arXiv&logoColor=yellow'></a> 
   <a href='https://vankouf.github.io/MotionMillion/'>
   <img src='https://img.shields.io/badge/Project-Page-%23df5b46?style=flat&logo=Google%20chrome&logoColor=%23df5b46'></a> 
-  <a href=''>
+  <a href='https://huggingface.co/datasets/InternRobotics/MotionMillion'>
   <img src='https://img.shields.io/badge/Data-Download-yellow?style=flat&logo=huggingface&logoColor=yellow'></a>
   <a href='https://github.com/VankouF/MotionMillion-Codes/'>
   <img src='https://img.shields.io/badge/GitHub-Code-black?style=flat&logo=github&logoColor=white'></a>
@@ -46,7 +46,8 @@
 <!-- ## 🤼‍♂ Arena -->
 
 ## 📢 News
-- **[TODO]** Release Dataset.
+- **[2025/07/26]** MotionMillion dataset is released.
+- **[2025/07/24]** Our paper received the **Highlight** award at ICCV 2025.
 - **[2025/07/03]** Train code, Inference code and Model checkpoints are released.
 - **[2025/06/26]** MotionMillion is officially accepted by **ICCV 2025**.
 
