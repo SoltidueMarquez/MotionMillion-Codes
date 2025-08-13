@@ -189,7 +189,7 @@ The MotionMillion-Eval prompts are save in assets/infer_batch_prompt.
 We provide the training guidance for motion reconstruction and text-to-motion tasks. The following steps will guide you through the training process.
 
 <details>
-  <summary><b> 2. Train Tokenizer </b></summary>
+  <summary><b> 1. Train Tokenizer </b></summary>
 
 For multi-gpus: run the following command: (We train our tokenizer by 4gpus on 80G gpu.)
 
@@ -207,7 +207,7 @@ If you don't want to use wavelet transformation, simply delete `${use_patcher}`,
 </details>
 
 <details>
-  <summary><b> 3. Train Text-to-Motion Model </b></summary>
+  <summary><b> 2. Train Text-to-Motion Model </b></summary>
 
 
 First, please run the following command to inference all of the motion codes by the trained FSQ.
@@ -232,7 +232,7 @@ bash scripts/train/train_t2m_7B.sh
 </details>
 
 <details>
-  <summary><b> 4. Evaluate the models </b></summary>
+  <summary><b> 3. Evaluate the models </b></summary>
 
 #### 4.1. Motion Reconstruction:
 
