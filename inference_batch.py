@@ -133,7 +133,7 @@ if __name__ == '__main__':
     comp_device = torch.device('cuda:0')
     args = option_trans.get_args_parser()
 
-    pipe = construct_llama(args.rewrite_model_path)
+    # pipe = construct_llama(args.rewrite_model_path)
     
     # load clip model
     if args.text_encode == 'clip':
