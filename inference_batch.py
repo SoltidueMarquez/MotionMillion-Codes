@@ -294,7 +294,6 @@ if __name__ == '__main__':
     config.block_size = args.block_size
     config.vocab_size = args.nb_code + 2  # 词汇表大小（代码本大小+2）
     config.clip_dim = args.clip_dim
-
     config.tie_weights = args.tie_weights
     print(config)
     trans_encoder = LLaMAHF(config)  # 创建LLaMA模型
@@ -407,12 +406,3 @@ if __name__ == '__main__':
             visualize_smplx_85(positions_with_heading, title=short_name, output_path=output_path, fps=args.fps)
             
             print("Inference done!")
-
-
-
-
-
-
-    
-
-    
