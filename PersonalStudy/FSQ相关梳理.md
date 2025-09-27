@@ -362,7 +362,46 @@ FSQ 的做法非常直接：**对编码向量的每一维进行“四舍五入�
 
 ##### 完整处理流水线
 
-1. **文本编码**：输入文本通过T5或CLIP编码器转换为特征向量
+```python
+def visualize_smplx_85(data, title=None, output_path='./recon_272/0_14_rot_new3.mp4', fps=60):    
+"""    
+可视化SMPLX数据，生成动作视频   
+输入:        
+	data: numpy数组, 形状通常为 (nframes, 85) 或 (1, nframes, 85)，SMPLX格式的动作数据。            
+	85维数据包含：前66维是身体姿态参数（轴角表示），随后是6维零填充，3维根节点位移，10维零填充。        
+	title: 字符串, 可选的标题，当前函数未直接使用，可能供其他可视化函数使用。        output_path: 字符串, 输出视频文件路径。        
+	fps: 整数, 生成视频的帧率。
+输出:        
+	无直接返回值。函数会生成一个GIF动画和一个MP4视频文件，保存在output_path指定的路径。    
+"""    
+	# 将输入数据赋值给局部变量    
+	smplx_85_data = data    
+	# 检查输入数据的维度，如果为3维（例如批量处理时是[1, nframes, 85]），则压缩掉第一个批次维度    
+	if len(smplx_85_data.shape) == 3:       
+		smplx_85_data = np.squeeze(smplx_85_data, axis=0)    # 调用函数将85维的SMPLX数据转换为322维的完整SMPLX数据格式（通过零填充其他参数）    # 需要查看 smplx85_2_smplx322 函数的实现以确认输出维度，推测为 (nframes, 322)    	
+		smplx_85_data = smplx85_2_smplx322(smplx_85_data)    # 处理SMPLX数据，获取网格顶点、关节位置、动作数据和面信息    
+		# 输入: smplx_85_data (nframes, 322), norm_global_orient=False, transform=False    
+		# 输出:     
+			#   vert: 顶点坐标，具体维度需查看 process_smplx_data 函数，推测为 (nframes, 10475, 3) 
+			#   joints: 关节坐标，具体维度需查看 process_smplx_data 函数，推测为 (nframes, n_joints, 3)。此项目通常使用22个关节。   
+			#   motion: 可能包含其他运动信息，具体需查看函数实现。    
+			#   faces: 网格的面信息，用于渲染。    
+		vert, joints, motion, faces = process_smplx_data(smplx_85_data, norm_global_orient=False, transform=False)    
+		# 从所有关节中提取前22个主要关节的3D坐标，并确保数据在CPU上且转换为numpy数组    
+		# 操作: joints[:, :22, :] 选取前22个关节 -> reshape 确保形状为 (nframes, 22, 3)    
+		# 输出 xyz: numpy数组, 形状为 (nframes, 22, 3)    
+		xyz = joints[:, :22, :].reshape(-1, 22, 3).detach().cpu().numpy()    # 创建输出文件所在的目录，如果目录不存在则创建    
+		os.makedirs(os.path.dirname(output_path), exist_ok=True)    
+		# 调用 plot_3d_motion 函数生成3D动作序列的图像帧列表    
+		# 输入: 一个列表，包含关节坐标数据 [xyz, None, None]。后两个None可能是为其他数据预留的位置。    
+		# 输出 img: 一个列表，包含一系列图像帧（例如PIL图像对象或numpy数组），用于生成动画。    
+		img = plot_3d_motion([xyz, None, None])    
+		# 使用 imageio 将图像帧列表保存为GIF动画文件    
+		imageio.mimsave(output_path, np.array(img), fps=fps)    
+		# 使用 moviepy 读取刚才生成的GIF文件    
+		out_video = mp.VideoFileClip(output_path)    # 将视频文件转换为MP4格式并保存，文件名通过替换扩展名得到    
+		out_video.write_videofile(output_path.replace('.gif', '.mp4'))
+```
 2. **运动量化**：运动数据通过FSQ被离散化为token序列
 3. **特征融合**：文本特征与运动token在嵌入空间对齐
 4. **自回归生成**：LLaMA基于文本条件生成运动token序列
