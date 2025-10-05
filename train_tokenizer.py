@@ -142,6 +142,64 @@ def main():
         net.load_state_dict(ckpt, strict=True)
     net.train()
     net.to(comp_device)
+    
+    # 打印模型参数信息
+    logger.info("=" * 50)
+    logger.info("HumanVQVAE 模型参数信息:")
+    logger.info("=" * 50)
+    
+    # # 打印每个参数的形状和大小
+    # total_params = 0
+    # trainable_params = 0
+    
+    # for name, param in net.named_parameters():
+    #     param_count = param.numel()
+    #     total_params += param_count
+    #     if param.requires_grad:
+    #         trainable_params += param_count
+    #     logger.info(f"{name}: {param.shape} | 参数数量: {param_count:,}")
+    
+    # logger.info("=" * 50)
+    # logger.info(f"总参数量: {total_params:,}")
+    # logger.info(f"可训练参数量: {trainable_params:,}")
+    # logger.info("=" * 50)
+    
+    # # 计算模型显存占用
+    # logger.info("模型显存占用信息:")
+    # logger.info("=" * 50)
+    
+    # # 计算参数显存占用（假设使用float32，每个参数4字节）
+    # param_memory_bytes = total_params * 4  # float32 = 4 bytes
+    # param_memory_mb = param_memory_bytes / (1024 * 1024)
+    # param_memory_gb = param_memory_mb / 1024
+    
+    # logger.info(f"参数显存占用: {param_memory_bytes:,} bytes ({param_memory_mb:.2f} MB / {param_memory_gb:.4f} GB)")
+    
+    # # 计算梯度显存占用（训练时需要存储梯度）
+    # gradient_memory_bytes = trainable_params * 4  # 梯度也是float32
+    # gradient_memory_mb = gradient_memory_bytes / (1024 * 1024)
+    # gradient_memory_gb = gradient_memory_mb / 1024
+    
+    # logger.info(f"梯度显存占用: {gradient_memory_bytes:,} bytes ({gradient_memory_mb:.2f} MB / {gradient_memory_gb:.4f} GB)")
+    
+    # # 计算优化器状态显存占用（AdamW需要存储momentum和variance）
+    # optimizer_memory_bytes = trainable_params * 8  # AdamW: momentum(4) + variance(4) = 8 bytes per param
+    # optimizer_memory_mb = optimizer_memory_bytes / (1024 * 1024)
+    # optimizer_memory_gb = optimizer_memory_mb / 1024
+    
+    # logger.info(f"优化器状态显存占用: {optimizer_memory_bytes:,} bytes ({optimizer_memory_mb:.2f} MB / {optimizer_memory_gb:.4f} GB)")
+    
+    # # 计算总显存占用（参数 + 梯度 + 优化器状态）
+    # total_training_memory_bytes = param_memory_bytes + gradient_memory_bytes + optimizer_memory_bytes
+    # total_training_memory_mb = total_training_memory_bytes / (1024 * 1024)
+    # total_training_memory_gb = total_training_memory_bytes / (1024 * 1024 * 1024)
+    
+    # logger.info("=" * 50)
+    # logger.info(f"训练时总显存占用: {total_training_memory_bytes:,} bytes ({total_training_memory_mb:.2f} MB / {total_training_memory_gb:.4f} GB)")
+    # logger.info("=" * 50)
+    
+    # # 停止函数执行
+    # logger.info("模型参数和显存统计完成，程序结束")
 
 ##### ---- Optimizer & Scheduler ---- #####
     optimizer = optim.AdamW(net.parameters(), lr=args.lr, betas=(0.9, 0.99), weight_decay=args.weight_decay)
@@ -159,15 +217,18 @@ def main():
 
     Loss = losses.ReConsLoss(args.recons_loss, args.nb_joints)
 
-    ##### ------ warm-up ------- #####
+    print("------ warm-up -------")
+
+    ##### ------ warm-up ------- ##### 
     avg_recons, avg_perplexity, avg_commit, avg_activate = 0., 0., 0., 0.
 
     if not args.resume_pth:
         for nb_iter in range(1, args.warm_up_iter):
-        
+            print("nb_iter: ", nb_iter)
+            
             optimizer, current_lr = update_lr_warm_up(optimizer, nb_iter, args.warm_up_iter, args.lr)
-            gt_motion = next(train_loader_iter)
-            gt_motion = gt_motion.to(comp_device).float() # (bs, 64, dim)
+            gt_motion = next(train_loader_iter) # 获取下一个训练批次的数据
+            gt_motion = gt_motion.to(comp_device).float() # 数据预处理和设备转移(bs, 64, dim)
 
             if args.quantizer == "FSQ":
                 pred_motion, loss_commit, perplexity, activate, _ = net(gt_motion)
@@ -214,13 +275,16 @@ def main():
                     logger.info(f"Warmup. Iter {nb_iter} :  lr {current_lr:.5f} \t Commit. {avg_commit:.5f} \t PPL. {avg_perplexity:.2f} \t Recons.  {avg_recons:.5f} \t Activate. {avg_activate:.2f}")
                 
                 avg_recons, avg_perplexity, avg_commit, avg_activate = 0., 0., 0., 0.
+    
+    print("准备开始训练")
 
 ##### ---- Training ---- #####
     avg_recons, avg_perplexity, avg_commit, avg_activate = 0., 0., 0., 0.
 
     accelerator.wait_for_everyone()
+    
+    # 好像是这边的问题
     best_mpjpe, writer, logger = eval_trans.evaluation_vqvae_motionmillion(args.out_dir, train_loader, val_loader, net, logger, writer, 0, best_mpjpe=1000, comp_device=comp_device, codebook_size=accelerator.unwrap_model(net).vqvae.quantizer.codebook_size, accelerator=accelerator)
-
 
     if args.resume_pth:
         start_iter = state_dict["nb_iter"] + 1
@@ -228,7 +292,8 @@ def main():
         start_iter = 1
 
     for nb_iter in range(start_iter, args.total_iter + 1):
-    
+        print("nb_iter: ", nb_iter)
+        
         gt_motion = next(train_loader_iter)
     
         pred_motion, loss_commit, perplexity, activate, _ = net(gt_motion)
