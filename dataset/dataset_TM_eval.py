@@ -164,10 +164,12 @@ def MotionMillionFSQDATALoader(dataset_name, is_test,
     val_loader = torch.utils.data.DataLoader( val_dataset, 
                                               batch_size,
                                               shuffle = True,
-                                              num_workers=40, # num_workers,
+                                              num_workers=num_workers,
                                               collate_fn=collate_fn,
-                                              drop_last = True,
-                                              prefetch_factor=2)
+                                            #   drop_last = True,
+                                            #   prefetch_factor=2)
+                                              drop_last = False,
+                                              pin_memory=True)
     return val_loader, val_dataset.mean, val_dataset.std
 
 def cycle(iterable):

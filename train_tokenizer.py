@@ -110,9 +110,18 @@ def main():
                                         unit_length=2**args.down_t,
                                         num_workers=args.num_workers)
 
-    val_loader, test_mean, test_std = dataset_TM_eval.MotionMillionFSQDATALoader(args.dataname, True,
+    # val_loader, test_mean, test_std = dataset_TM_eval.MotionMillionFSQDATALoader(args.dataname, True,
+    #                                     32,
+    #                                     w_vectorizer,
+    #                                     unit_length=2**args.down_t,
+    #                                     version=args.version)
+    # 验证集在 Windows/调试下使用单进程加载，避免多进程导致的 None 批次
+    val_loader, test_mean, test_std = dataset_TM_eval.MotionMillionFSQDATALoader(
+                                        args.dataname,
+                                        True,
                                         32,
                                         w_vectorizer,
+                                        num_workers=0,
                                         unit_length=2**args.down_t,
                                         version=args.version)
 

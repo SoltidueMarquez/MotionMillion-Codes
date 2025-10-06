@@ -70,6 +70,9 @@ def evaluation_vqvae(out_dir, train_loader, val_loader, net, logger, writer, nb_
     motion_indices = []
 
     for batch in tqdm(val_loader):
+        # Debug: 打印 val_loader 信息
+        print(f"val_loader info: dataset_size={len(val_loader.dataset)}, batch_size={val_loader.batch_size}, num_workers={val_loader.num_workers}")
+        print(f"Current batch info: batch type={type(batch)}, batch length={len(batch) if batch else 'None'}")
        
         word_embeddings, pos_one_hots, caption, sent_len, motion, m_length, token, name = batch
 
@@ -256,6 +259,10 @@ def evaluation_vqvae_motionmillion_1gpu(out_dir, train_loader, val_loader, net, 
     motion_indices = []
     print("开始评估")
     for batch in tqdm(val_loader):
+        # Debug: 打印 val_loader 信息
+        print(f"val_loader info: dataset_size={len(val_loader.dataset)}, batch_size={val_loader.batch_size}, num_workers={val_loader.num_workers}")
+        print(f"Current batch info: batch type={type(batch)}, batch length={len(batch) if batch else 'None'}")
+        
         if(batch is None):
             print("batch is None, Continue")
             continue
@@ -380,6 +387,10 @@ def evaluation_vqvae_motionmillion(out_dir, train_loader, val_loader, net, logge
     print("开始评估")
     
     for batch in tqdm(val_loader):
+        # Debug: 打印 val_loader 信息
+        print(f"val_loader info: dataset_size={len(val_loader.dataset)}, batch_size={val_loader.batch_size}, num_workers={val_loader.num_workers}")
+        print(f"Current batch info: batch type={type(batch)}, batch length={len(batch) if batch else 'None'}")
+        
         if(batch is None):
             print("batch is None, Continue")
             continue
@@ -492,6 +503,10 @@ def evaluation_transformer(out_dir, val_loader, net, trans, logger, writer, nb_i
 
     for i in range(1):
         for batch in tqdm(val_loader):
+            # Debug: 打印 val_loader 信息
+            print(f"val_loader info: dataset_size={len(val_loader.dataset)}, batch_size={val_loader.batch_size}, num_workers={val_loader.num_workers}")
+            print(f"Current batch info: batch type={type(batch)}, batch length={len(batch) if batch else 'None'}")
+            
             word_embeddings, pos_one_hots, clip_text, sent_len, pose, m_length, token, name = batch
             bs, seq = pose.shape[:2]
             num_joints = 21 if pose.shape[-1] == 251 else 22
@@ -730,6 +745,10 @@ def evaluation_transformer_motionmillion(out_dir, val_loader, net, trans, logger
         global_cnt = 0
         
         for batch in tqdm(val_loader):
+            # Debug: 打印 val_loader 信息
+            print(f"val_loader info: dataset_size={len(val_loader.dataset)}, batch_size={val_loader.batch_size}, num_workers={val_loader.num_workers}")
+            print(f"Current batch info: batch type={type(batch)}, batch length={len(batch) if batch else 'None'}")
+            
             global_cnt += 1
             _, _, clip_text, _, pose, m_length, _, name = batch
             bs, seq = pose.shape[:2]
@@ -909,6 +928,10 @@ def evaluation_transforme_root(out_dir, val_loader, net, trans, logger, writer, 
     nb_sample = 0
     for i in range(1):
         for batch in tqdm(val_loader):
+            # Debug: 打印 val_loader 信息
+            print(f"val_loader info: dataset_size={len(val_loader.dataset)}, batch_size={val_loader.batch_size}, num_workers={val_loader.num_workers}")
+            print(f"Current batch info: batch type={type(batch)}, batch length={len(batch) if batch else 'None'}")
+            
             word_embeddings, pos_one_hots, clip_text, sent_len, pose, m_length, token, name = batch
             root_motion = pose[:, :, :4].to(comp_device).float()
             bs, seq = pose.shape[:2]
