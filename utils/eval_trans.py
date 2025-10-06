@@ -254,8 +254,11 @@ def evaluation_vqvae_motionmillion_1gpu(out_dir, train_loader, val_loader, net, 
         gt_max_acceleration_seq = 0
 
     motion_indices = []
-
+    print("开始评估")
     for batch in tqdm(val_loader):
+        if(batch is None):
+            print("batch is None, Continue")
+            continue
         
         if len(batch) == 3:
             motion, m_length, name = batch
@@ -374,8 +377,13 @@ def evaluation_vqvae_motionmillion(out_dir, train_loader, val_loader, net, logge
     nb_sample = torch.tensor(0, device=comp_device)
 
     motion_indices = []
+    print("开始评估")
     
     for batch in tqdm(val_loader):
+        if(batch is None):
+            print("batch is None, Continue")
+            continue
+        
         motion, m_length, name = batch
         
         motion = motion.to(comp_device)
