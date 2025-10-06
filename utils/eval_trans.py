@@ -6,13 +6,13 @@ import torch
 from scipy import linalg
 
 import visualize.plot_3d_global as plot_3d
-from visualize.recover_visualize import visualize_smpl_85
+# from visualize.recover_visualize import visualize_smpl_85
 from utils.motion_process import recover_from_ric, recover_from_local_position, recover_from_local_rotation
 from tqdm import tqdm
 
 
-def tensorborad_add_video_rot(writer, global_rot, nb_iter, tag, nb_vis=4, title_batch=None, outname=None, fps=60):
-    visualize_smpl_85(global_rot, title=title_batch, output_path=outname, fps=fps)
+# def tensorborad_add_video_rot(writer, global_rot, nb_iter, tag, nb_vis=4, title_batch=None, outname=None, fps=60):
+#     visualize_smpl_85(global_rot, title=title_batch, output_path=outname, fps=fps)
 
 @torch.no_grad()
 def compute_perplexity(codebook_size, code_idx) :
@@ -338,10 +338,10 @@ def evaluation_vqvae_motionmillion_1gpu(out_dir, train_loader, val_loader, net, 
             writer.add_scalar('./Test/Gt_max_acceleration_seq', gt_max_acceleration_seq, nb_iter)
         
         print(len(draw_pred))
-        for ii in range(len(draw_pred))[:10]:
-            print(ii)
-            tensorborad_add_video_rot(writer, draw_pred[ii], nb_iter, tag='./Vis/pred_eval'+str(ii), nb_vis=1, title_batch=["test"], outname=[os.path.join(out_dir, 'pred'+name_list[ii]+'.gif')] if savegif else None, fps=fps)
-            tensorborad_add_video_rot(writer, draw_org[ii], nb_iter, tag='./Vis/org_eval'+str(ii), nb_vis=1, title_batch=["test"], outname=[os.path.join(out_dir, 'gt'+name_list[ii]+'.gif')] if savegif else None, fps=fps)
+        # for ii in range(len(draw_pred))[:10]:
+        #     print(ii)
+        #     tensorborad_add_video_rot(writer, draw_pred[ii], nb_iter, tag='./Vis/pred_eval'+str(ii), nb_vis=1, title_batch=["test"], outname=[os.path.join(out_dir, 'pred'+name_list[ii]+'.gif')] if savegif else None, fps=fps)
+        #     tensorborad_add_video_rot(writer, draw_org[ii], nb_iter, tag='./Vis/org_eval'+str(ii), nb_vis=1, title_batch=["test"], outname=[os.path.join(out_dir, 'gt'+name_list[ii]+'.gif')] if savegif else None, fps=fps)
 
     if mpjpe < best_mpjpe : 
         msg = f"--> --> \t MPJPE Improved from {best_mpjpe:.5f} to {mpjpe:.5f} !!!"
@@ -654,13 +654,13 @@ def evaluation_transformer(out_dir, val_loader, net, trans, logger, writer, nb_i
         writer.add_scalar('./Test/matching_score', matching_score_pred, nb_iter)
 
     
-        if nb_iter % 10000 == 0 : 
-            for ii in range(4):
-                tensorborad_add_video_xyz(writer, draw_org[ii], nb_iter, tag='./Vis/org_eval'+str(ii), nb_vis=1, title_batch=[draw_text[ii]], outname=[os.path.join(out_dir, 'gt'+str(ii)+'.gif')] if savegif else None)
+        # if nb_iter % 10000 == 0 : 
+        #     for ii in range(4):
+        #         tensorborad_add_video_xyz(writer, draw_org[ii], nb_iter, tag='./Vis/org_eval'+str(ii), nb_vis=1, title_batch=[draw_text[ii]], outname=[os.path.join(out_dir, 'gt'+str(ii)+'.gif')] if savegif else None)
             
-        if nb_iter % 10000 == 0 : 
-            for ii in range(4):
-                tensorborad_add_video_xyz(writer, draw_pred[ii], nb_iter, tag='./Vis/pred_eval'+str(ii), nb_vis=1, title_batch=[draw_text_pred[ii]], outname=[os.path.join(out_dir, 'pred'+str(ii)+'.gif')] if savegif else None)
+        # if nb_iter % 10000 == 0 : 
+        #     for ii in range(4):
+        #         tensorborad_add_video_xyz(writer, draw_pred[ii], nb_iter, tag='./Vis/pred_eval'+str(ii), nb_vis=1, title_batch=[draw_text_pred[ii]], outname=[os.path.join(out_dir, 'pred'+str(ii)+'.gif')] if savegif else None)
 
     if accelerator is None or accelerator.is_main_process:
         if fid < best_fid : 
@@ -989,13 +989,13 @@ def evaluation_transforme_root(out_dir, val_loader, net, trans, logger, writer, 
         writer.add_scalar('./Test/matching_score', matching_score_pred, nb_iter)
 
     
-        if nb_iter % 10000 == 0 : 
-            for ii in range(4):
-                tensorborad_add_video_xyz(writer, draw_org[ii], nb_iter, tag='./Vis/org_eval'+str(ii), nb_vis=1, title_batch=[draw_text[ii]], outname=[os.path.join(out_dir, 'gt'+str(ii)+'.gif')] if savegif else None)
+        # if nb_iter % 10000 == 0 : 
+        #     for ii in range(4):
+        #         tensorborad_add_video_xyz(writer, draw_org[ii], nb_iter, tag='./Vis/org_eval'+str(ii), nb_vis=1, title_batch=[draw_text[ii]], outname=[os.path.join(out_dir, 'gt'+str(ii)+'.gif')] if savegif else None)
             
-        if nb_iter % 10000 == 0 : 
-            for ii in range(4):
-                tensorborad_add_video_xyz(writer, draw_pred[ii], nb_iter, tag='./Vis/pred_eval'+str(ii), nb_vis=1, title_batch=[draw_text_pred[ii]], outname=[os.path.join(out_dir, 'pred'+str(ii)+'.gif')] if savegif else None)
+        # if nb_iter % 10000 == 0 : 
+        #     for ii in range(4):
+        #         tensorborad_add_video_xyz(writer, draw_pred[ii], nb_iter, tag='./Vis/pred_eval'+str(ii), nb_vis=1, title_batch=[draw_text_pred[ii]], outname=[os.path.join(out_dir, 'pred'+str(ii)+'.gif')] if savegif else None)
 
     
     if fid < best_fid : 
@@ -1157,11 +1157,11 @@ def evaluation_transformer_test(out_dir, val_loader, net, trans, logger, writer,
     logger.info(msg)
     
     
-    if draw:
-        for ii in range(len(draw_org)):
-            tensorborad_add_video_xyz(writer, draw_org[ii], nb_iter, tag='./Vis/'+draw_name[ii]+'_org', nb_vis=1, title_batch=[draw_text[ii]], outname=[os.path.join(out_dir, draw_name[ii]+'_skel_gt.gif')] if savegif else None)
+    # if draw:
+    #     for ii in range(len(draw_org)):
+    #         tensorborad_add_video_xyz(writer, draw_org[ii], nb_iter, tag='./Vis/'+draw_name[ii]+'_org', nb_vis=1, title_batch=[draw_text[ii]], outname=[os.path.join(out_dir, draw_name[ii]+'_skel_gt.gif')] if savegif else None)
         
-            tensorborad_add_video_xyz(writer, draw_pred[ii], nb_iter, tag='./Vis/'+draw_name[ii]+'_pred', nb_vis=1, title_batch=[draw_text_pred[ii]], outname=[os.path.join(out_dir, draw_name[ii]+'_skel_pred.gif')] if savegif else None)
+    #         tensorborad_add_video_xyz(writer, draw_pred[ii], nb_iter, tag='./Vis/'+draw_name[ii]+'_pred', nb_vis=1, title_batch=[draw_text_pred[ii]], outname=[os.path.join(out_dir, draw_name[ii]+'_skel_pred.gif')] if savegif else None)
 
     trans.train()
     return fid, best_iter, diversity, R_precision[0], R_precision[1], R_precision[2], matching_score_pred, multimodality, writer, logger
