@@ -106,17 +106,40 @@ def cycle(iterable):
         for x in iterable:
             yield x
 
-def train_one_iter(feat_clip_text, m_tokens, m_tokens_len, y_mask, trans_encoder):
+def cleanup_memory():
+    """清理GPU内存的辅助函数"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        torch.cuda.synchronize()
+
+def check_memory_usage(iteration, threshold=0.9):
+    """检查内存使用情况，如果超过阈值则清理"""
+    if torch.cuda.is_available():
+        memory_allocated = torch.cuda.memory_allocated() / 1024**3
+        memory_reserved = torch.cuda.memory_reserved() / 1024**3
+        total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        
+        usage_ratio = memory_allocated / total_memory
+        if usage_ratio > threshold:
+            print(f"警告: 内存使用率过高 ({usage_ratio:.2%})，执行清理...")
+            cleanup_memory()
+            memory_allocated_after = torch.cuda.memory_allocated() / 1024**3
+            print(f"清理后内存使用: {memory_allocated_after:.2f}GB")
+        
+        return memory_allocated, memory_reserved
+    return 0, 0
+
+def train_one_iter(feat_clip_text, m_tokens, m_tokens_len, y_mask, trans_encoder, args, comp_device):
     
     m_tokens, m_tokens_len = m_tokens.to(comp_device), m_tokens_len.to(comp_device)
     bs = m_tokens.shape[0]
 
-    target = m_tokens
-    
-    target = target.to(comp_device)
-    
+    target = m_tokens.to(comp_device)
     input_index = target
 
+    # 使用更节省内存的方式生成mask
     if args.pkeep == -1:
         proba = np.random.rand(1)[0]
         mask = torch.bernoulli(proba * torch.ones(input_index.shape,
@@ -125,18 +148,25 @@ def train_one_iter(feat_clip_text, m_tokens, m_tokens_len, y_mask, trans_encoder
         mask = torch.bernoulli(args.pkeep * torch.ones(input_index.shape,
                                                         device=input_index.device))
     mask = mask.round().to(dtype=torch.int64)
+    
+    # 使用in-place操作减少内存使用
     r_indices = torch.randint_like(input_index, args.nb_code)
     a_indices = mask*input_index+(1-mask)*r_indices
 
+    # 清理不需要的变量
+    del mask, r_indices
+
     cls_pred = trans_encoder(a_indices, feat_clip_text, y_mask)
     
-    cls_pred = cls_pred.contiguous()
+    # 清理a_indices
+    del a_indices
     
+    cls_pred = cls_pred.contiguous()
 
     return cls_pred, target
 
 
-if __name__ == '__main__':
+def main():
 
     ##### ---- Exp dirs ---- #####
     args = option_trans.get_args_parser()
@@ -146,6 +176,25 @@ if __name__ == '__main__':
     args.out_dir = os.path.join(args.out_dir, f'{args.exp_name}')
 
     os.makedirs(args.out_dir, exist_ok = True)
+    
+    # region 内存优化设置
+    # 设置CUDA内存分配策略
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
+    # 清理GPU缓存
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        print(f"GPU内存清理完成，当前可用内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        # 设置内存增长策略
+        torch.cuda.set_per_process_memory_fraction(0.95)  # 使用95%的GPU内存
+    # endregion
 
     if args.debug:
         args.print_iter = 1
@@ -159,6 +208,19 @@ if __name__ == '__main__':
     logger = utils_model.get_logger(args.out_dir)
     writer = SummaryWriter(args.out_dir)
     logger.info(json.dumps(vars(args), indent=4, sort_keys=True))
+    # endregion
+
+    # 打印调试信息
+    print("=" * 50)
+    print("开始初始化LLaMA Transformer训练")
+    print(f"实验名称: {args.exp_name}")
+    print(f"输出目录: {args.out_dir}")
+    print(f"设备: {comp_device}")
+    print(f"批次大小: {args.batch_size}")
+    print(f"梯度累积步数: {args.gradient_accumulation_steps}")
+    if torch.cuda.is_available():
+        print(f"GPU内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    print("=" * 50)
 
     from utils.word_vectorizer import WordVectorizer
 
@@ -170,8 +232,11 @@ if __name__ == '__main__':
         for p in clip_model.parameters():
             p.requires_grad = False
     elif args.text_encode == 'flan-t5-xl':
-        tokenizer = T5Tokenizer.from_pretrained('checkpoints/models--google--flan-t5-xl/snapshots/7d6315df2c2fb742f0f5b556879d730926ca9001', local_files_only=True)
-        text_encoder = T5EncoderModel.from_pretrained('checkpoints/models--google--flan-t5-xl/snapshots/7d6315df2c2fb742f0f5b556879d730926ca9001', local_files_only=True).to(device=comp_device)
+        # tokenizer = T5Tokenizer.from_pretrained('checkpoints/models--google--flan-t5-xl/snapshots/7d6315df2c2fb742f0f5b556879d730926ca9001', local_files_only=True)
+        # text_encoder = T5EncoderModel.from_pretrained('checkpoints/models--google--flan-t5-xl/snapshots/7d6315df2c2fb742f0f5b556879d730926ca9001', local_files_only=True).to(device=comp_device)
+        tokenizer = T5Tokenizer.from_pretrained('checkpoints/models--google--flan-t5-xl', local_files_only=True)
+        text_encoder = T5EncoderModel.from_pretrained('checkpoints/models--google--flan-t5-xl', local_files_only=True).to(device=comp_device)
+
         clip_model = (tokenizer, text_encoder)
         clip_model[1].eval()
         for p in clip_model[1].parameters():
@@ -235,6 +300,13 @@ if __name__ == '__main__':
     net.load_state_dict(ckpt, strict=True)
     net.eval()
     net.to(comp_device)
+    
+    # 打印VQ-VAE模型信息
+    print("=" * 50)
+    print("VQ-VAE模型加载完毕")
+    print(f"Codebook大小: {args.nb_code}")
+    print(f"量化器类型: {args.quantizer}")
+    print("=" * 50)
 
     nb_iter, avg_loss_cls, avg_acc = 0, 0., 0.
      
@@ -253,10 +325,51 @@ if __name__ == '__main__':
     trans_encoder.train()
     trans_encoder.to(comp_device)
 
+    # 添加模型大小debug信息
+    print("=" * 60)
+    print("LLaMA Transformer模型详细信息:")
+    print(f"模型配置: {config}")
+    print(f"设备: {comp_device}")
+    
+    # 计算模型参数数量
+    total_params = sum(p.numel() for p in trans_encoder.parameters())
+    trainable_params = sum(p.numel() for p in trans_encoder.parameters() if p.requires_grad)
+    
+    print(f"总参数数量: {total_params:,}")
+    print(f"可训练参数数量: {trainable_params:,}")
+    
+    # 计算模型大小（MB）
+    param_size = sum(p.numel() * p.element_size() for p in trans_encoder.parameters()) / 1024**2
+    buffer_size = sum(b.numel() * b.element_size() for b in trans_encoder.buffers()) / 1024**2
+    model_size_mb = param_size + buffer_size
+    
+    print(f"模型参数大小: {param_size:.2f} MB")
+    print(f"模型缓冲区大小: {buffer_size:.2f} MB")
+    print(f"模型总大小: {model_size_mb:.2f} MB")
+    
+    # 检查GPU内存使用
+    if torch.cuda.is_available():
+        memory_allocated = torch.cuda.memory_allocated() / 1024**3
+        memory_reserved = torch.cuda.memory_reserved() / 1024**3
+        total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"\n模型加载后GPU内存使用: {memory_allocated:.2f}GB / {total_memory:.2f}GB")
+        print(f"GPU内存预留: {memory_reserved:.2f}GB")
+        print(f"内存使用率: {memory_allocated/total_memory:.2%}")
+    
+    print("=" * 60)
+
     if args.mixed_precision == 'fp16':
         trans_encoder = trans_encoder.half()
+        print("模型转换为FP16精度")
     elif args.mixed_precision == 'bf16':
         trans_encoder = trans_encoder.bfloat16()
+        print("模型转换为BF16精度")
+    
+    # 转换精度后再次检查内存
+    if torch.cuda.is_available():
+        memory_allocated = torch.cuda.memory_allocated() / 1024**3
+        memory_reserved = torch.cuda.memory_reserved() / 1024**3
+        print(f"精度转换后GPU内存使用: {memory_allocated:.2f}GB / {memory_reserved:.2f}GB")
 
     ##### ---- Optimizer & Scheduler ---- #####
     if args.mixed_precision == 'bf16':
@@ -292,7 +405,13 @@ if __name__ == '__main__':
         args.vq_dir = os.path.join("./dataset/HumanML3D", f'{args.vq_name}')
         args.prob_dir = os.path.join("./dataset/HumanML3D", f'{args.vq_name}' + '_prob.npy')
 
-    print("Start Training!")
+    print("=" * 50)
+    print("开始LLaMA Transformer训练!")
+    print(f"总迭代次数: {args.total_iter}")
+    print(f"批次大小: {args.batch_size}")
+    print(f"学习率: {args.lr}")
+    print(f"LLaMA模型大小: {args.pretrained_llama}")
+    print("=" * 50)
     loss_ce = torch.nn.CrossEntropyLoss(ignore_index=args.nb_code+1)
 
     if args.dataname == 'motionmillion':
@@ -318,6 +437,8 @@ if __name__ == '__main__':
     ##### ---- Training ---- #####
     
     while nb_iter <= args.total_iter:
+        # 在每次迭代开始时清理内存
+        cleanup_memory()
 
         batch = next(train_loader_iter)
 
@@ -327,8 +448,25 @@ if __name__ == '__main__':
             if len(y_mask.shape) == 1:
                 y_mask = y_mask.unsqueeze(1)
                 feat_clip_text = feat_clip_text.unsqueeze(1)
+            
+            # 内存监控和序列长度检查
+            memory_allocated, memory_reserved = check_memory_usage(nb_iter, threshold=0.85)
+            print(f"迭代 {nb_iter}: GPU内存使用 {memory_allocated:.2f}GB / {memory_reserved:.2f}GB")
+            
+            # 检查序列长度
+            if nb_iter <= 10:  # 前几次迭代打印详细信息
+                print(f"迭代 {nb_iter}: m_tokens shape: {m_tokens.shape}, feat_clip_text shape: {feat_clip_text.shape}")
+                print(f"模型block_size: {trans_encoder.config.block_size}")
                 
-            cls_pred, target = train_one_iter(feat_clip_text, m_tokens, m_tokens_len, y_mask, trans_encoder)
+                # 详细内存分析
+                if torch.cuda.is_available():
+                    print(f"前向传播前内存: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
+                
+            cls_pred, target = train_one_iter(feat_clip_text, m_tokens, m_tokens_len, y_mask, trans_encoder, args, comp_device)
+            
+            # 前向传播后内存检查
+            if nb_iter <= 10 and torch.cuda.is_available():
+                print(f"前向传播后内存: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
             bs = target.shape[0]  
 
             loss_cls = 0.0
@@ -337,29 +475,69 @@ if __name__ == '__main__':
             target = target[..., 1:].contiguous().to(torch.int64)
 
             loss_cls = loss_ce(cls_pred.view(-1, cls_pred.shape[-1]), target.view(-1))
+            
+            # 损失计算后内存检查
+            if nb_iter <= 10 and torch.cuda.is_available():
+                print(f"损失计算后内存: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
 
-            probs = torch.softmax(cls_pred.float(), dim=-1)
-            if args.if_maxtest:
-                _, cls_pred_index = torch.max(probs, dim=-1)
-            else:
-                dist = Categorical(probs)
-                cls_pred_index = dist.sample()
+            # 使用更节省内存的方式计算概率和采样
+            with torch.cuda.amp.autocast(enabled=False):  # 禁用自动混合精度避免类型转换问题
+                probs = torch.softmax(cls_pred.float(), dim=-1)
+                if args.if_maxtest:
+                    _, cls_pred_index = torch.max(probs, dim=-1)
+                else:
+                    dist = Categorical(probs)
+                    cls_pred_index = dist.sample()
+            
+            # 概率计算后内存检查
+            if nb_iter <= 10 and torch.cuda.is_available():
+                print(f"概率计算后内存: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
+            
             token_mask = (target != args.nb_code+1)
             right_num += ((cls_pred_index == target) & token_mask).sum().item()
             nb_sample_train += token_mask.sum().item()
 
             optimizer.zero_grad()
             accelerator.backward(loss_cls)
+            
+            # 反向传播后内存检查
+            if nb_iter <= 10 and torch.cuda.is_available():
+                print(f"反向传播后内存: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
 
             # only on the last gradient accumulation step, execute the optimizer step
             if accelerator.sync_gradients:
+                # 优化器步骤前内存检查
+                if nb_iter <= 10 and torch.cuda.is_available():
+                    print(f"优化器步骤前内存: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
+                
                 optimizer.step()
                 if args.lr_scheduler_type == 'CosineDecayScheduler' or args.lr_scheduler_type == 'ConstantScheduler':
                     scheduler.step(nb_iter//args.gradient_accumulation_steps)
                 else:
                     scheduler.step()
+                
+                # 优化器步骤后内存检查
+                if nb_iter <= 10 and torch.cuda.is_available():
+                    print(f"优化器步骤后内存: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
+                
+                # 在优化器步骤后立即清理内存
+                cleanup_memory()
+                
+                # 清理后内存检查
+                if nb_iter <= 10 and torch.cuda.is_available():
+                    print(f"内存清理后: {torch.cuda.memory_allocated() / 1024**3:.2f}GB")
 
         avg_loss_cls = avg_loss_cls + loss_cls.item()
+        
+        # 清理中间变量
+        try:
+            del cls_pred, target, probs, token_mask
+            if 'cls_pred_index' in locals():
+                del cls_pred_index
+            if 'dist' in locals():
+                del dist
+        except:
+            pass  # 忽略删除不存在的变量时的错误
         
         if accelerator.is_main_process:
             lr = optimizer.param_groups[0]['lr']
@@ -404,3 +582,7 @@ if __name__ == '__main__':
             }
             torch.save(save_dict, os.path.join(args.out_dir, f'net_last.pth'))
             
+
+
+if __name__ == '__main__':
+    main()
