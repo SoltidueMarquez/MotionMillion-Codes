@@ -17,6 +17,7 @@ import pickle
 def merge_into_pickle(root_dir, split_file_path):
 
     all_files = open(split_file_path, "r").readlines()
+    print(f"开始合并数据，共{len(all_files)}个文件")
 
     # create data dict
     data_dict = {
@@ -40,9 +41,10 @@ def merge_into_pickle(root_dir, split_file_path):
 
     with open(os.path.join(root_dir, "all_data.pkl"), "wb") as f:
         pickle.dump(data_dict, f)
+    
+    print(f"数据合并完成，共处理{len(data_dict['file_names'])}个文件")
         
-if __name__ == '__main__':
-
+def main():
     ##### ---- Exp dirs ---- #####
     args = option_trans.get_args_parser()
     torch.manual_seed(args.seed)
@@ -58,13 +60,22 @@ if __name__ == '__main__':
     # accelerate
     accelerator = Accelerator(mixed_precision=args.mixed_precision, gradient_accumulation_steps=args.gradient_accumulation_steps)
     
-    # comp_device = torch.device('cuda')
     comp_device = accelerator.device
 
     ##### ---- Logger ---- #####
     logger = utils_model.get_logger(args.out_dir)
     writer = SummaryWriter(args.out_dir)
     logger.info(json.dumps(vars(args), indent=4, sort_keys=True))
+    # endregion
+
+    # 打印调试信息
+    print("=" * 50)
+    print("开始生成运动代码")
+    print(f"实验名称: {args.exp_name}")
+    print(f"输出目录: {args.out_dir}")
+    print(f"设备: {comp_device}")
+    print(f"数据集: {args.dataname}")
+    print("=" * 50)
 
     net = vqvae.HumanVQVAE(args, ## use args to define different parameters in different quantizers
                         args.nb_code,
@@ -91,6 +102,13 @@ if __name__ == '__main__':
     net.load_state_dict(ckpt, strict=True)
     net.eval()
     net.to(comp_device)
+    
+    # 打印VQ-VAE模型信息
+    print("=" * 50)
+    print("VQ-VAE模型加载完毕")
+    print(f"Codebook大小: {args.nb_code}")
+    print(f"量化器类型: {args.quantizer}")
+    print("=" * 50)
 
     ##### ---- get code ---- #####
     if args.dataname == 'motionmillion':
@@ -111,6 +129,12 @@ if __name__ == '__main__':
 
         if not os.path.exists(args.vq_dir) or not os.path.exists(args.prob_dir):
             logger.info(f"Start to get code from the {args.dataname}!")
+            print("=" * 50)
+            print("开始生成运动代码")
+            print(f"VQ目录: {args.vq_dir}")
+            print(f"概率文件: {args.prob_dir}")
+            print("=" * 50)
+            
             train_loader_token, _, _ = dataset_tokenize.DATALoader(args.dataname, 1, unit_length=2**args.down_t, motion_type=args.motion_type, text_type=args.text_type, version=args.version)
             os.makedirs(args.vq_dir, exist_ok = True)
             
@@ -145,8 +169,26 @@ if __name__ == '__main__':
             # save the probability distribution
             torch.save(code_probs, args.prob_dir)
             logger.info(f"Code distribution saved to {args.prob_dir}")
+            print("=" * 50)
+            print("运动代码生成完成!")
+            print(f"代码分布已保存到: {args.prob_dir}")
+            print(f"总token数: {total_tokens}")
+            print("=" * 50)
         else:
             if accelerator.is_main_process:
                 logger.info(f"The code has been saved in {args.vq_dir} before!")
+                print("=" * 50)
+                print("运动代码已存在，跳过生成过程")
+                print(f"VQ目录: {args.vq_dir}")
+                print("=" * 50)
     
-    merge_into_pickle(root_dir, pjoin(root_dir, "split/version1/t2m_60_300/all.txt"))            
+    merge_into_pickle(root_dir, pjoin(root_dir, "split/version1/t2m_60_300/all.txt"))
+    
+    print("=" * 50)
+    print("all_data.pkl文件生成完成!")
+    print(f"文件路径: {os.path.join(root_dir, 'all_data.pkl')}")
+    print("=" * 50)
+
+
+if __name__ == '__main__':
+    main()
