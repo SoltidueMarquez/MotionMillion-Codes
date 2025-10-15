@@ -84,3 +84,13 @@ AssertionError: Cannot forward sequence of length 301, block size is only 150
 还是超了内存
 
 ![image-20251015181403288](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251015181403288.png)
+
+
+
+
+
+添加一些debug看看：
+
+![image-20251016000823112](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251016000823112.png)
+
+内存一直爆，没什么头绪，可能是梯度那边计算的问题
