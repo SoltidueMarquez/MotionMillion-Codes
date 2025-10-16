@@ -89,8 +89,32 @@ AssertionError: Cannot forward sequence of length 301, block size is only 150
 
 
 
+#### 10/16：
+
 添加一些debug看看：
 
 ![image-20251016000823112](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251016000823112.png)
 
 内存一直爆，没什么头绪，可能是梯度那边计算的问题
+
+
+
+![image-20251016083717609](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251016083717609.png)
+
+一到这边就爆，应该是这边的问题，增加了强制清理内存方法：
+
+![image-20251016083812382](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251016083812382.png)
+
+![image-20251016083836558](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251016083836558.png)
+
+减小了gradient_accumulation_steps参数的大小，避免一次做很多调度
+
+```python
+Exception has occurred: OutOfMemoryError
+CUDA out of memory. Tried to allocate 54.00 MiB. GPU 0 has a total capacity of 15.92 GiB of which 0 bytes is free. Of the allocated memory 27.90 GiB is allocated by PyTorch, and 1.84 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+  File "D:\Desktop\动画项目\MotionMillion-Codes\train_t2m_llama.py", line 421, in main
+    optimizer.step()
+  File "D:\Desktop\动画项目\MotionMillion-Codes\train_t2m_llama.py", line 485, in <module>
+    main()
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 54.00 MiB. GPU 0 has a total capacity of 15.92 GiB of which 0 bytes is free. Of the allocated memory 27.90 GiB is allocated by PyTorch, and 1.84 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+```

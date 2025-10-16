@@ -52,6 +52,10 @@ class WarmupCosineDecayScheduler:
         else:
             # otherwise, use CosineAnnealingLR to update the learning rate
             self.cosine_scheduler.step()
+        
+        # 添加内存清理
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     def state_dict(self):
         return {
@@ -91,6 +95,10 @@ class WarmupConstantScheduler:
             self.warmup_scheduler.step()
         else:
             pass
+        
+        # 添加内存清理
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     def state_dict(self):
         return {
@@ -148,14 +156,18 @@ def main():
     os.makedirs(args.out_dir, exist_ok = True)
     
     # region 内存优化设置
-    # 设置CUDA内存分配策略
-    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-    
-    # 清理GPU缓存
+    # 设置CUDA内存分配策略 - 不要有虚拟内存
+    # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:False' 
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True' 
+       
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-        print(f"GPU内存清理完成，当前可用内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        
+        # 获取GPU信息
+        gpu_props = torch.cuda.get_device_properties(0)
+        total_memory = gpu_props.total_memory / 1024**3
+        print(f"GPU总内存: {total_memory:.2f} GB")
         
         # 强制垃圾回收
         import gc
@@ -309,6 +321,7 @@ def main():
     elif args.lr_scheduler_type == 'CosineDecayScheduler':
         # leawrning rate warm up and then cosine decay
         scheduler = WarmupCosineDecayScheduler(optimizer, args.total_iter//10//args.gradient_accumulation_steps, args.total_iter//args.gradient_accumulation_steps, resume_trans=args.resume_trans)
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.total_iter//args.gradient_accumulation_steps,eta_min=0)
     elif args.lr_scheduler_type == 'ConstantScheduler':
         scheduler = WarmupConstantScheduler(optimizer, args.total_iter//10//args.gradient_accumulation_steps, args.total_iter//args.gradient_accumulation_steps, resume_trans=args.resume_trans)
     else:
@@ -407,13 +420,24 @@ def main():
             optimizer.zero_grad()
             accelerator.backward(loss_cls)
 
+            # Memory问题出在这里
             # only on the last gradient accumulation step, execute the optimizer step
             if accelerator.sync_gradients:
                 optimizer.step()
+
+                # 立即清理优化器相关的临时内存
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                # 更新学习率
                 if args.lr_scheduler_type == 'CosineDecayScheduler' or args.lr_scheduler_type == 'ConstantScheduler':
                     scheduler.step(nb_iter//args.gradient_accumulation_steps)
                 else:
                     scheduler.step()
+
+                # 调度器更新后再次清理内存
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         avg_loss_cls = avg_loss_cls + loss_cls.item()
         
