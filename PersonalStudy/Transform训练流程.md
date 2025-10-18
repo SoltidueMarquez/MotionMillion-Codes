@@ -128,3 +128,11 @@ torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 54.00 MiB. GPU 0 h
 还是不行，没办法了，去找老师吧
 
 ![image-20251016090529175](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251016090529175.png)
+
+
+
+
+
+![image-20251017124137785](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251017124137785.png)
+
+看论文，搞懂 Transformer learningrateschedule的WarmupandCosinedecay是什么为什么要用这个。
