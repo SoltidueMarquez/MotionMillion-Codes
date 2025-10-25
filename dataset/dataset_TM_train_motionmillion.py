@@ -158,10 +158,23 @@ class Text2MotionDataset_motionmillion(data.Dataset):
         elif self.text_encode in ['flan-t5-xxl', 'flan-t5-xl']:
             cap_inputs = self.clip_model[0](caption, padding=True, truncation=True, return_tensors="pt")
             y_mask = cap_inputs.attention_mask.to(device=self.comp_device) # 1,9
-            feat_clip_text = self.clip_model[1](
-                input_ids=cap_inputs.input_ids.to(self.comp_device), 
-                attention_mask=cap_inputs.attention_mask.to(self.comp_device), output_hidden_states=False
-            ).last_hidden_state
+            
+            # 检查T5编码器是否在CPU上
+            if next(self.clip_model[1].parameters()).device.type == 'cpu':
+                # T5编码器在CPU上，需要临时移动到GPU进行推理
+                with torch.no_grad():
+                    feat_clip_text = self.clip_model[1](
+                        input_ids=cap_inputs.input_ids.to(self.comp_device), 
+                        attention_mask=cap_inputs.attention_mask.to(self.comp_device), 
+                        output_hidden_states=False
+                    ).last_hidden_state
+            else:
+                # T5编码器在GPU上，正常处理
+                feat_clip_text = self.clip_model[1](
+                    input_ids=cap_inputs.input_ids.to(self.comp_device), 
+                    attention_mask=cap_inputs.attention_mask.to(self.comp_device), 
+                    output_hidden_states=False
+                ).last_hidden_state
         else:
             raise ValueError(f'Unknown text encoder: {self.text_encode}')
         

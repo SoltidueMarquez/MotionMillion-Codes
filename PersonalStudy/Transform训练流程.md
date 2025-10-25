@@ -136,3 +136,54 @@ torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 54.00 MiB. GPU 0 h
 ![image-20251017124137785](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251017124137785.png)
 
 看论文，搞懂 Transformer learningrateschedule的WarmupandCosinedecay是什么为什么要用这个。
+
+
+
+#### 10/21：
+
+把项目搬到服务器上
+
+有两个文件实在是传不上去，暂时用不到，应该没啥关系：破案了，磁盘空间满了，不能搬了
+
+![image-20251023081121946](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251023081121946.png)
+
+这下的也太久了
+
+![image-20251023081145777](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251023081145777.png)
+
+一个包下了一个下午
+
+
+
+上了服务器还真是这样，麻了
+
+![image-20251023081218765](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251023081218765.png)
+
+
+
+#### 10/23-10/24：
+
+得去看看，是不是这个并行配置没用上，得改改看：
+
+![image-20251023081230641](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251023081230641.png)
+
+1.yaml文件相关的参数到底作用在了哪里，并行设置是不是导致了在单张卡上模拟了多张卡导致梯度要回传
+
+2.搞清楚step到底做了什么
+
+3.读训练代码看看有没有并行相关的设置，时刻注意我们是单张GPU
+
+优化了，但是好像没啥用：
+
+![image-20251023092143694](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251023092143694.png)
+
+改成训练1B，终于跑出来了：
+
+![image-20251023093249833](Transform%E8%AE%AD%E7%BB%83%E6%B5%81%E7%A8%8B.assets/image-20251023093249833.png)
+
+感觉就是GPU内存的问题
+
+
+
+接下来就是读代码了，先从getcodes开始吧
+
