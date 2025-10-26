@@ -1,23 +1,3 @@
-"""
-单GPU版本训练脚本 - 基于 train_t2m_llama.py 修改
-
-主要修改内容：
-1. 移除 Accelerator 多GPU分布式训练框架
-2. 简化设备管理，直接使用 torch.device('cuda:0')
-3. 移除多进程同步相关代码 (accelerator.prepare, accelerator.accumulate, accelerator.backward, accelerator.sync_gradients, accelerator.wait_for_everyone, accelerator.is_main_process)
-4. 添加单GPU专用的内存监控和清理函数
-5. 【重要】移除梯度累积逻辑，单GPU下梯度累积没有意义，直接使用批次大小
-6. 添加混合精度训练支持 (torch.cuda.amp.GradScaler)
-7. 增强内存管理，添加频繁的内存清理和监控
-8. 移除不必要的进程间通信和同步操作
-9. 优化训练循环，减少内存占用
-10. 添加详细的单GPU训练日志和监控
-11. 【关键】每次迭代都进行参数更新，不再累积梯度
-
-适用场景：单GPU环境下的模型训练，避免多GPU配置导致的内存爆炸问题
-建议：直接调整 --batch-size 参数而不是使用 --gradient_accumulation_steps
-"""
-
 import os 
 # import multiprocessing
 import torch
