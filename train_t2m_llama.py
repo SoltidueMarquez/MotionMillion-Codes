@@ -579,7 +579,7 @@ def main():
             #   预测: [token1, token2, ..., token_n]
             #   即：用前n-1个token预测后n-1个token
             
-            cls_pred = cls_pred[..., :-1, :].contiguous()  # [batch_size, seq_len-1, nb_code]
+            cls_pred = cls_pred[..., :-1, :].contiguous()  # [batch_size 1, seq_len-1 300, nb_code 65536]
             target = target[..., 1:].contiguous().to(torch.int64)  # [batch_size, seq_len-1]
 
             # ==================== 计算损失 ====================

@@ -83,10 +83,10 @@ dataset_TM_train_motionmillion.py脚本中__getitem__的方法：
 ![image-20251026163144113](Transformer_train_llama.assets/image-20251026163144113.png)
 
 - 每个epoch从同一条动作的多条描述中随机选择一条
-
 - 增加多样性，降低对单条描述的过拟合
-
 - 动作不变，描述在变化
+
+![image-20251028161102406](Transformer_train_llama.assets/image-20251028161102406.png)
 
 ![image-20251026163231511](Transformer_train_llama.assets/image-20251026163231511.png)
 
@@ -121,3 +121,6 @@ VQ-VAE可预训练并用作分词器，让训练更稳定。端到端可能破�
 #### 4：为什么用混合精度训练（fp16/bf16）
 
 混合精度能显著降低显存、加快计算，且通常稳定性可接受。需要留意数值下溢和梯度裁剪，并配合scaler做loss缩放与回退。
+
+
+
