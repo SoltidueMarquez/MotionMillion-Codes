@@ -236,6 +236,154 @@ def compute_quantization_error(
 # endregion
 
 
+# region 帧级误差计算
+def compute_reconstruction_error_per_frame(
+    net: torch.nn.Module,
+    motion: Union[torch.Tensor, np.ndarray],
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """
+    计算每帧重构误差，返回形状 (T,) 或 (b, T)。
+
+    rec 与 motion 均为 (b, T, 272)，MSE reduction="none" 得 (b,T,272)，
+    对 272 维 mean 得每帧误差。
+    """
+    if device is None:
+        device = next(net.parameters()).device
+    if isinstance(motion, np.ndarray):
+        motion = torch.from_numpy(motion).float()
+    motion = motion.to(device)
+    if motion.dim() == 2:
+        motion = motion.unsqueeze(0)
+
+    with torch.no_grad():
+        rec, _, _, _, _ = net(motion)
+        err = torch.nn.functional.mse_loss(rec, motion, reduction="none")  # (b, T, 272)
+        err = err.mean(dim=2)  # (b, T)
+    if err.shape[0] == 1:
+        err = err.squeeze(0)  # (T,)
+    return err
+
+
+def compute_quantization_error_per_frame(
+    net: torch.nn.Module,
+    motion: Union[torch.Tensor, np.ndarray],
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """
+    计算每帧量化误差。latent 时间维度为 T/2，每个 token 对应约 2 帧，
+    通过 repeat_interleave 映射回帧级。
+    """
+    if device is None:
+        device = next(net.parameters()).device
+    if isinstance(motion, np.ndarray):
+        motion = torch.from_numpy(motion).float()
+    motion = motion.to(device)
+    if motion.dim() == 2:
+        motion = motion.unsqueeze(0)
+
+    T = motion.shape[1]
+    vqvae_inner = net.vqvae
+    quantizer = vqvae_inner.quantizer
+    if quantizer.__class__.__name__ != "FSQ":
+        raise ValueError("量化误差仅支持 FSQ 量化器")
+
+    with torch.no_grad():
+        x_in = vqvae_inner.preprocess(motion)
+        z = vqvae_inner.encoder(x_in)
+        z = rearrange(z, "b d ... -> b ... d")
+        z, ps = _pack_one(z, "b * d")
+        z = quantizer.project_in(z)
+        z = rearrange(z, "b n (c d) -> b n c d", c=quantizer.num_codebooks)
+
+        from torch.amp import autocast
+        from contextlib import nullcontext
+        from functools import partial
+        force_f32 = getattr(quantizer, "force_quantization_f32", True)
+        ctx = partial(autocast, "cuda", enabled=False) if force_f32 else nullcontext
+
+        with ctx():
+            if force_f32 and z.dtype not in (torch.float32, torch.float64):
+                z = z.float()
+            z_bounded = quantizer.bound(z)
+            codes = quantizer.quantize(z)
+            half_width = quantizer._levels // 2
+            codes_level = codes * half_width
+            diff = z_bounded - codes_level
+            err_token = (diff * diff).sum(dim=-1)  # (b, n), n = T/2
+
+        # 映射到帧级：每个 token 对应 2 帧
+        err = err_token.repeat_interleave(2, dim=1)  # (b, 2*n)
+        if err.shape[1] < T:
+            # T 为奇数时，最后一帧复制最后一个 token 的误差
+            pad = err[:, -1:].expand(-1, T - err.shape[1])
+            err = torch.cat([err, pad], dim=1)
+        elif err.shape[1] > T:
+            err = err[:, :T]
+
+    if err.shape[0] == 1:
+        err = err.squeeze(0)  # (T,)
+    return err
+
+
+def corrupt_frames_to_intervals(
+    corrupt_mask: Union[torch.Tensor, np.ndarray],
+) -> str:
+    """
+    将每帧损坏标签转为区间字符串，1-based inclusive。
+
+    输入：corrupt_mask (T,) bool
+    输出：如 "[1,17],[22,78]" 或 "[]"
+    """
+    if isinstance(corrupt_mask, torch.Tensor):
+        corrupt_mask = corrupt_mask.cpu().numpy()
+    corrupt_mask = np.asarray(corrupt_mask, dtype=bool).ravel()
+    if corrupt_mask.size == 0 or not corrupt_mask.any():
+        return "[]"
+
+    # 找到连续 True 的 run
+    intervals = []
+    in_run = False
+    start = 0
+    for i in range(len(corrupt_mask)):
+        if corrupt_mask[i] and not in_run:
+            in_run = True
+            start = i
+        elif not corrupt_mask[i] and in_run:
+            in_run = False
+            intervals.append((start + 1, i))  # 1-based inclusive
+    if in_run:
+        intervals.append((start + 1, len(corrupt_mask)))  # 1-based inclusive
+
+    return ",".join(f"[{s},{e}]" for s, e in intervals)
+
+
+def detect_corrupt_per_frame(
+    net: torch.nn.Module,
+    motion: Union[torch.Tensor, np.ndarray],
+    threshold: float,
+    metric: Literal["recon", "quant"] = "recon",
+    device: Optional[torch.device] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, str]:
+    """
+    帧级检测：返回每帧误差、损坏掩码、损坏区间字符串。
+
+    Returns:
+        per_frame_err: (T,) 每帧误差
+        corrupt_mask: (T,) bool 每帧是否损坏
+        intervals_str: 如 "[1,17],[22,78]" 或 "[]"
+    """
+    if metric == "recon":
+        per_frame_err = compute_reconstruction_error_per_frame(net, motion, device)
+    else:
+        per_frame_err = compute_quantization_error_per_frame(net, motion, device)
+
+    corrupt_mask = per_frame_err > threshold
+    intervals_str = corrupt_frames_to_intervals(corrupt_mask)
+    return per_frame_err, corrupt_mask, intervals_str
+# endregion
+
+
 # region 损坏判定
 def detect_corrupt(
     net: torch.nn.Module,

@@ -29,6 +29,7 @@ from dataset_corrupt_detection import create_dataloader
 from detect_corrupt_utils import (
     compute_quantization_error,
     compute_reconstruction_error,
+    detect_corrupt_per_frame,
     load_detector,
 )
 
@@ -43,13 +44,15 @@ def run_batch_detect(
     file_list_path: Optional[str] = None,
     batch_size: int = 1,
     device: Optional[str] = None,
+    frame_level: bool = False,
     **dataset_kwargs,
 ) -> None:
     """
     批量检测：遍历 motion 文件，计算误差，写入 CSV。
 
     流程：加载模型 -> 创建 DataLoader -> 逐 batch 计算误差 -> 写入 CSV。
-    每行记录：文件名、误差值、是否损坏（True/False）。
+    frame_level=False：每行记录 文件名、误差值、是否损坏（True/False）。
+    frame_level=True：每行记录 文件名、损坏帧区间（如 [1,17],[22,78]）、整段 mean_error（可选）。
 
     Args:
         motion_dir: 运动文件根目录
@@ -60,6 +63,7 @@ def run_batch_detect(
         file_list_path: 文件列表 txt，不提供则扫描 motion_dir
         batch_size: 批大小，建议 1（序列长度可变）
         device: 计算设备
+        frame_level: 是否启用帧级检测，输出损坏帧区间
         **dataset_kwargs: 传给 create_dataloader 的 dataset 参数
     """
     net, _ = load_detector(ckpt_path, device=device)
@@ -72,15 +76,17 @@ def run_batch_detect(
         **dataset_kwargs,
     )
 
-    if metric == "recon":
-        compute_fn = compute_reconstruction_error
-    else:
-        compute_fn = compute_quantization_error
-
     os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["name", "error", "corrupt"])
+        if frame_level:
+            writer.writerow(["name", "corrupt_intervals", "mean_error"])
+        else:
+            if metric == "recon":
+                compute_fn = compute_reconstruction_error
+            else:
+                compute_fn = compute_quantization_error
+            writer.writerow(["name", "error", "corrupt"])
 
         for batch in tqdm(loader, desc="检测中"):
             motion, names = batch
@@ -91,11 +97,23 @@ def run_batch_detect(
             # batch_size=1 时 motion 为 (1, T, 272)
             for i in range(motion.shape[0]):
                 m = motion[i : i + 1]
-                err = compute_fn(net, m, reduction="mean")
-                err_val = err.item() if hasattr(err, "item") else float(err)
-                corrupt = err_val > threshold
                 name = names[i] if i < len(names) else str(i)
-                writer.writerow([name, f"{err_val:.6f}", corrupt])
+                if frame_level:
+                    _, _, intervals_str = detect_corrupt_per_frame(
+                        net, m, threshold, metric=metric, device=None
+                    )
+                    mean_err = compute_reconstruction_error(
+                        net, m, reduction="mean"
+                    ) if metric == "recon" else compute_quantization_error(
+                        net, m, reduction="mean"
+                    )
+                    mean_val = mean_err.item() if hasattr(mean_err, "item") else float(mean_err)
+                    writer.writerow([name, intervals_str, f"{mean_val:.6f}"])
+                else:
+                    err = compute_fn(net, m, reduction="mean")
+                    err_val = err.item() if hasattr(err, "item") else float(err)
+                    corrupt = err_val > threshold
+                    writer.writerow([name, f"{err_val:.6f}", corrupt])
 # endregion
 
 
@@ -173,6 +191,11 @@ def main() -> None:
         action="store_true",
         help="目录扫描时不递归子目录",
     )
+    parser.add_argument(
+        "--frame-level",
+        action="store_true",
+        help="启用帧级检测，输出损坏帧区间（如 [1,17],[22,78]）",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.ckpt):
@@ -193,6 +216,7 @@ def main() -> None:
         file_list_path=args.file_list,
         batch_size=args.batch_size,
         device=args.device,
+        frame_level=args.frame_level,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
         min_length=args.min_length,
