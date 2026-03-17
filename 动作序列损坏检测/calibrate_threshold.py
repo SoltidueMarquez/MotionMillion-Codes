@@ -129,7 +129,10 @@ def compute_roc_metrics(
     tpr = np.array(tpr_list)
     fpr = np.array(fpr_list)
 
-    # AUC: 梯形积分
+    # AUC: 梯形积分。需按 fpr 升序排列，否则 np.trapz 会因 x 递减而得负值
+    order = np.argsort(fpr)
+    fpr = fpr[order]
+    tpr = tpr[order]
     auc = np.trapz(tpr, fpr)
 
     return thresholds, tpr, fpr, auc
@@ -171,6 +174,9 @@ def save_roc_plot(
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        # 避免中文乱码：优先使用支持 CJK 的字体
+        plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
     except ImportError:
         print("警告：未安装 matplotlib，跳过绘图")
         return
