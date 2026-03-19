@@ -328,12 +328,19 @@ def compute_quantization_error_per_frame(
 
 def corrupt_frames_to_intervals(
     corrupt_mask: Union[torch.Tensor, np.ndarray],
+    merge_gap: int = 0,
+    min_interval_len: int = 0,
 ) -> str:
     """
     将每帧损坏标签转为区间字符串，1-based inclusive。
 
     输入：corrupt_mask (T,) bool
     输出：如 "[1,17],[22,78]" 或 "[]"
+
+    Args:
+        corrupt_mask: 每帧是否损坏的布尔掩码
+        merge_gap: 间隔<=此值的相邻区间合并，0=不合并
+        min_interval_len: 长度<此值的区间丢弃，0=不过滤
     """
     if isinstance(corrupt_mask, torch.Tensor):
         corrupt_mask = corrupt_mask.cpu().numpy()
@@ -355,6 +362,21 @@ def corrupt_frames_to_intervals(
     if in_run:
         intervals.append((start + 1, len(corrupt_mask)))  # 1-based inclusive
 
+    # 短区间过滤
+    if min_interval_len > 0:
+        intervals = [(s, e) for s, e in intervals if (e - s + 1) >= min_interval_len]
+
+    # 区间合并：间隔<=merge_gap 的相邻区间合并
+    if merge_gap > 0 and len(intervals) > 1:
+        merged = [intervals[0]]
+        for s, e in intervals[1:]:
+            prev_s, prev_e = merged[-1]
+            if s - prev_e <= merge_gap:
+                merged[-1] = (prev_s, e)
+            else:
+                merged.append((s, e))
+        intervals = merged
+
     return ",".join(f"[{s},{e}]" for s, e in intervals)
 
 
@@ -364,9 +386,17 @@ def detect_corrupt_per_frame(
     threshold: float,
     metric: Literal["recon", "quant"] = "recon",
     device: Optional[torch.device] = None,
+    smooth_sigma: float = 0,
+    merge_gap: int = 0,
+    min_interval_len: int = 0,
 ) -> Tuple[torch.Tensor, torch.Tensor, str]:
     """
     帧级检测：返回每帧误差、损坏掩码、损坏区间字符串。
+
+    Args:
+        smooth_sigma: 时序平滑 sigma，>0 时对 err_per_frame 做高斯平滑，0=关闭
+        merge_gap: 区间合并，间隔<=此值的相邻区间合并，0=关闭
+        min_interval_len: 短区间过滤，长度<此值的区间丢弃，0=关闭
 
     Returns:
         per_frame_err: (T,) 每帧误差
@@ -378,8 +408,20 @@ def detect_corrupt_per_frame(
     else:
         per_frame_err = compute_quantization_error_per_frame(net, motion, device)
 
+    # 时序平滑：抑制单帧噪声
+    if smooth_sigma > 0:
+        from scipy.ndimage import gaussian_filter1d
+
+        err_np = per_frame_err.cpu().numpy()
+        err_smooth = gaussian_filter1d(err_np, sigma=smooth_sigma, mode="nearest")
+        per_frame_err = torch.from_numpy(err_smooth.astype(np.float32)).to(
+            per_frame_err.device
+        )
+
     corrupt_mask = per_frame_err > threshold
-    intervals_str = corrupt_frames_to_intervals(corrupt_mask)
+    intervals_str = corrupt_frames_to_intervals(
+        corrupt_mask, merge_gap=merge_gap, min_interval_len=min_interval_len
+    )
     return per_frame_err, corrupt_mask, intervals_str
 # endregion
 

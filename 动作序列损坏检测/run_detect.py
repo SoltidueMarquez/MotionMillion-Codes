@@ -49,6 +49,9 @@ def run_batch_detect(
     batch_size: int = 1,       # 批大小，建议 1（因为不同序列长度可能不同，pad 后 batch>1 也可）
     device: Optional[str] = None,  # 计算设备，None 表示自动选 cuda/cpu
     frame_level: bool = False,  # 是否启用帧级检测：True 时输出损坏帧区间，False 时只输出整段是否损坏
+    smooth_sigma: float = 0,  # 时序平滑 sigma，>0 启用，推荐 2~3
+    merge_gap: int = 0,       # 区间合并：间隔<=此值的相邻区间合并，推荐 2~5
+    min_interval_len: int = 0,  # 短区间过滤：长度<此值的区间丢弃，推荐 2~4
     **dataset_kwargs,          # 其他参数会传给 create_dataloader（如 motion_type, unit_length, min_length, recursive）
 ) -> None:
     """
@@ -106,7 +109,10 @@ def run_batch_detect(
                     # 帧级检测：返回 (每帧误差, 损坏掩码, 区间字符串)
                     # 这里只用 intervals_str，如 "[1,17],[22,78]" 或 "[]"
                     _, _, intervals_str = detect_corrupt_per_frame(
-                        net, m, threshold, metric=metric, device=None
+                        net, m, threshold, metric=metric, device=None,
+                        smooth_sigma=smooth_sigma,
+                        merge_gap=merge_gap,
+                        min_interval_len=min_interval_len,
                     )
                     # 计算整段平均误差（用于 CSV 中展示）
                     mean_err = compute_reconstruction_error(
@@ -221,6 +227,25 @@ def main() -> None:
         action="store_true",
         help="启用帧级检测，输出损坏帧区间（如 [1,17],[22,78]）",
     )
+    # 精度优化参数（帧级检测时生效）
+    parser.add_argument(
+        "--smooth-sigma",
+        type=float,
+        default=0,
+        help="时序平滑 sigma，>0 时对 err_per_frame 做高斯平滑，推荐 2~3，0=关闭",
+    )
+    parser.add_argument(
+        "--merge-gap",
+        type=int,
+        default=0,
+        help="区间合并：间隔<=此值的相邻区间合并，推荐 2~5，0=关闭",
+    )
+    parser.add_argument(
+        "--min-interval-len",
+        type=int,
+        default=0,
+        help="短区间过滤：长度<此值的区间丢弃，推荐 2~4，0=关闭",
+    )
     # 解析命令行，得到 args 对象
     args = parser.parse_args()
 
@@ -247,6 +272,9 @@ def main() -> None:
         batch_size=args.batch_size,
         device=args.device,
         frame_level=args.frame_level,
+        smooth_sigma=args.smooth_sigma,
+        merge_gap=args.merge_gap,
+        min_interval_len=args.min_interval_len,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
         min_length=args.min_length,

@@ -230,6 +230,25 @@ def main() -> None:
     parser.add_argument("--motion-type", type=str, default="vector_272")
     parser.add_argument("--unit-length", type=int, default=2)
     parser.add_argument("--min-length", type=int, default=64)
+    # 帧级检测精度优化参数（与 run_detect 一致，用于输出推荐命令）
+    parser.add_argument(
+        "--smooth-sigma",
+        type=float,
+        default=2.5,
+        help="时序平滑 sigma，推荐 2~3，0=关闭",
+    )
+    parser.add_argument(
+        "--merge-gap",
+        type=int,
+        default=3,
+        help="区间合并：间隔<=此值的相邻区间合并，推荐 2~5，0=关闭",
+    )
+    parser.add_argument(
+        "--min-interval-len",
+        type=int,
+        default=2,
+        help="短区间过滤：长度<此值的区间丢弃，推荐 2~4，0=关闭",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.ckpt):
@@ -269,7 +288,12 @@ def main() -> None:
     print(f"损坏样本误差: mean={errors[labels==1].mean():.6f}, std={errors[labels==1].std():.6f}")
     print(f"AUC: {auc:.4f}")
     print(f"推荐阈值（F1 最大）: {best_th:.6f}, F1={best_f1:.4f}")
-    print(f"建议 run_detect 使用: --threshold {best_th:.6f}")
+    print(f"建议 run_detect 使用（整段）: --threshold {best_th:.6f}")
+    print(
+        f"建议 run_detect 使用（帧级+优化）: --threshold {best_th:.6f} --frame-level "
+        f"--smooth-sigma {args.smooth_sigma} --merge-gap {args.merge_gap} "
+        f"--min-interval-len {args.min_interval_len}"
+    )
     print("=" * 50)
 
     if args.output_plot:
