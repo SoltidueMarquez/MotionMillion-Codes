@@ -51,8 +51,8 @@ def run_batch_detect(
     batch_size: int = 1,       # 批大小，建议 1（因为不同序列长度可能不同，pad 后 batch>1 也可）
     device: Optional[str] = None,  # 计算设备，None 表示自动选 cuda/cpu
     frame_level: bool = False,  # 是否启用帧级检测：True 时输出损坏帧区间，False 时只输出整段是否损坏
-    output_dir: Optional[str] = None,  # 可视化输出根目录，--visualize 时使用
-    visualize: bool = False,   # 是否保存输入与重建动作视频
+    output_dir: Optional[str] = None,  # 可视化输出根目录，--visualize-num 时使用
+    visualize_num: int = 0,    # 仅对前 N 个样本做可视化，0 表示不可视化
     vis_fps: int = 30,         # 可视化视频帧率
     **dataset_kwargs,          # 其他参数会传给 create_dataloader（如 motion_type, unit_length, min_length, recursive）
 ) -> None:
@@ -78,9 +78,9 @@ def run_batch_detect(
     # 确保输出 CSV 所在目录存在，os.path.dirname(output_csv) 可能为空则用 "."
     os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
 
-    # 可视化输出目录：visualize 时若未指定 output_dir 则用 output_csv 所在目录
+    # 可视化输出目录：visualize_num > 0 时若未指定 output_dir 则用 output_csv 所在目录
     vis_output_dir = output_dir if output_dir else os.path.dirname(output_csv) or "."
-    if visualize:
+    if visualize_num > 0:
         os.makedirs(vis_output_dir, exist_ok=True)
 
     # 以写模式打开 CSV，newline="" 避免 Windows 下多空行，encoding="utf-8" 支持中文
@@ -99,6 +99,7 @@ def run_batch_detect(
             writer.writerow(["name", "error", "corrupt"])
 
         # 遍历每个 batch，tqdm 显示进度条
+        sample_idx = 0
         for batch in tqdm(loader, desc="检测中"):
             # batch 为 (motion, names)：motion 形状 (B, T, 272)，names 为文件名列表或单个字符串
             motion, names = batch
@@ -116,8 +117,8 @@ def run_batch_detect(
                 # 去掉 .npy 后缀作为文件夹名
                 name_stem = name[:-4] if name.endswith(".npy") else name
 
-                # 可视化：保存输入与重建动作视频到 output_dir/{name}/
-                if visualize:
+                # 可视化：仅对前 visualize_num 个样本保存输入与重建动作视频
+                if visualize_num > 0 and sample_idx < visualize_num:
                     dev = next(net.parameters()).device
                     with torch.no_grad():
                         rec, _, _, _, _ = net(m.to(dev))
@@ -125,6 +126,7 @@ def run_batch_detect(
                         m, rec, name_stem, vis_output_dir,
                         dataset.mean, dataset.std, fps=vis_fps,
                     )
+                sample_idx += 1
 
                 if frame_level:
                     # 帧级检测：返回 (每帧误差, 损坏掩码, 区间字符串)
@@ -250,12 +252,13 @@ def main() -> None:
         "--output",
         type=str,
         default=None,
-        help="可视化输出根目录，--visualize 时使用；未指定则使用 output-csv 所在目录",
+        help="可视化输出根目录，--visualize-num 时使用；未指定则使用 output-csv 所在目录",
     )
     parser.add_argument(
-        "--visualize",
-        action="store_true",
-        help="保存输入与重建动作视频到 output/{name}/input.mp4 与 reconstructed.mp4",
+        "--visualize-num",
+        type=int,
+        default=0,
+        help="仅对前 N 个样本做可视化，0 表示不可视化；大于样本总数则全部可视化",
     )
     parser.add_argument(
         "--vis-fps",
@@ -290,7 +293,7 @@ def main() -> None:
         device=args.device,
         frame_level=args.frame_level,
         output_dir=args.output,
-        visualize=args.visualize,
+        visualize_num=args.visualize_num,
         vis_fps=args.vis_fps,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
