@@ -18,6 +18,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# 确保项目根目录在 path 中，以便导入 detect_corrupt_utils
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+for _p in (_PROJECT_ROOT, _SCRIPT_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from tqdm import tqdm
@@ -268,6 +275,8 @@ def run_generate(
     seed: Optional[int] = None,
     recursive: bool = True,
     suffix: str = "_corrupt",
+    visualize: bool = False,
+    vis_fps: int = 30,
 ) -> None:
     """
     主流程：遍历文件，施加损坏，保存并生成 corrupt_list.txt。
@@ -351,6 +360,18 @@ def run_generate(
         # 记录 GT 损坏区间，供 evaluate_detect 对比
         gt_intervals_str = _intervals_to_mask_then_str(gt_intervals_0based, mlen)
         gt_entries.append((corrupt_entry, gt_intervals_str, mlen))
+
+        # 可视化：保存原始与损坏动作视频到 output_dir/vis/{rel_stem}/
+        if visualize:
+            try:
+                from detect_corrupt_utils import visualize_motion_vector272
+                vis_folder = output_path / "vis" / rel.with_suffix("")
+                vis_folder.mkdir(parents=True, exist_ok=True)
+                visualize_motion_vector272(motion, str(vis_folder / "input.mp4"), fps=vis_fps)
+                visualize_motion_vector272(motion_corrupt, str(vis_folder / "corrupt.mp4"), fps=vis_fps)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"可视化失败 {stem}: {e}")
 
     # 写入 good_list.txt 与 corrupt_list.txt
     good_list_path = output_path / "good_list.txt"
@@ -439,6 +460,17 @@ def main() -> None:
         default="_corrupt",
         help="损坏文件后缀，默认 _corrupt",
     )
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="保存原始与损坏动作视频到 output-dir/vis/{name}/input.mp4 与 corrupt.mp4",
+    )
+    parser.add_argument(
+        "--vis-fps",
+        type=int,
+        default=30,
+        help="可视化视频帧率",
+    )
     args = parser.parse_args()
 
     num_lo, num_hi = map(int, args.num_intervals.split(","))
@@ -455,6 +487,8 @@ def main() -> None:
         seed=args.seed,
         recursive=not args.no_recursive,
         suffix=args.suffix,
+        visualize=args.visualize,
+        vis_fps=args.vis_fps,
     )
 
 

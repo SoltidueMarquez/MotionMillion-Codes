@@ -384,6 +384,132 @@ def detect_corrupt_per_frame(
 # endregion
 
 
+# region 动作可视化
+def visualize_motion_vector272(
+    motion_denorm: np.ndarray,
+    output_path: str,
+    fps: int = 30,
+) -> bool:
+    """
+    将已反标准化的 vector_272 动作序列可视化为视频并保存。
+
+    流程：recover_from_local_rotation -> smpl_85 -> process_smplx_data -> plot_3d_motion -> imageio.mimsave。
+    依赖 visualize.smplx2joints（SMPL-X、CUDA）、imageio、matplotlib。
+
+    Args:
+        motion_denorm: 已反标准化的 motion (T, 272) 或 (1, T, 272)
+        output_path: 输出视频路径，建议 .mp4
+        fps: 视频帧率
+
+    Returns:
+        True 若成功，False 若失败（不抛出异常）
+    """
+    try:
+        from utils.motion_process import recover_from_local_rotation
+        from visualize.plot_3d_global import plot_3d_motion
+        from visualize.smplx2joints import process_smplx_data
+        import imageio
+    except ImportError as e:
+        import warnings
+        warnings.warn(f"可视化依赖未安装，跳过: {e}")
+        return False
+
+    try:
+        motion_denorm = np.asarray(motion_denorm, dtype=np.float32)
+        if motion_denorm.ndim == 3:
+            motion_denorm = motion_denorm.squeeze(0)
+        if motion_denorm.shape[1] != 272:
+            return False
+
+        smpl_85 = recover_from_local_rotation(motion_denorm, njoint=22)
+
+        # smpl_85 -> smplx_322（与 inference_single.visualize_smplx_85 一致）
+        smplx_322 = np.concatenate(
+            (
+                smpl_85[:, :66],
+                np.zeros((smpl_85.shape[0], 90)),
+                np.zeros((smpl_85.shape[0], 3)),
+                np.zeros((smpl_85.shape[0], 50)),
+                np.zeros((smpl_85.shape[0], 100)),
+                smpl_85[:, 72:75],
+                smpl_85[:, 75:],
+            ),
+            axis=-1,
+        )
+
+        vert, joints, motion, faces = process_smplx_data(
+            smplx_322, norm_global_orient=False, transform=False
+        )
+        xyz = joints[:, :22, :].reshape(-1, 22, 3).detach().cpu().numpy()
+
+        out_dir = os.path.dirname(output_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+        img = plot_3d_motion([xyz, None, None])
+        imageio.mimsave(output_path, np.array(img), fps=fps)
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"可视化失败 {output_path}: {e}")
+        return False
+
+
+def save_detection_visualizations(
+    motion: Union[torch.Tensor, np.ndarray],
+    rec: Union[torch.Tensor, np.ndarray],
+    name: str,
+    output_dir: str,
+    mean: np.ndarray,
+    std: np.ndarray,
+    fps: int = 30,
+) -> bool:
+    """
+    保存检测时的输入与重建动作视频到 output_dir/{name}/input.mp4 与 reconstructed.mp4。
+
+    motion、rec 为标准化空间，会先 inv_transform 再可视化。
+    失败时打印警告并返回 False，不中断流程。
+
+    Args:
+        motion: 输入动作 (T, 272) 或 (1, T, 272)，已标准化
+        rec: 重建动作，形状同 motion
+        name: 相对路径名，不含 .npy（如 subdir/motion_corrupt）
+        output_dir: 可视化输出根目录
+        mean: 272 维均值
+        std: 272 维标准差
+        fps: 视频帧率
+
+    Returns:
+        True 若至少一个视频保存成功，否则 False
+    """
+    try:
+        motion_np = motion.cpu().numpy() if isinstance(motion, torch.Tensor) else np.asarray(motion)
+        rec_np = rec.cpu().numpy() if isinstance(rec, torch.Tensor) else np.asarray(rec)
+        if motion_np.ndim == 3:
+            motion_np = motion_np.squeeze(0)
+        if rec_np.ndim == 3:
+            rec_np = rec_np.squeeze(0)
+
+        motion_denorm = motion_np * std + mean
+        rec_denorm = rec_np * std + mean
+
+        folder = os.path.join(output_dir, name.replace("\\", "/"))
+        os.makedirs(folder, exist_ok=True)
+
+        ok1 = visualize_motion_vector272(
+            motion_denorm, os.path.join(folder, "input.mp4"), fps=fps
+        )
+        ok2 = visualize_motion_vector272(
+            rec_denorm, os.path.join(folder, "reconstructed.mp4"), fps=fps
+        )
+        return ok1 or ok2
+    except Exception as e:
+        import warnings
+        warnings.warn(f"保存检测可视化失败 {name}: {e}")
+        return False
+# endregion
+
+
 # region 损坏判定
 def detect_corrupt(
     net: torch.nn.Module,

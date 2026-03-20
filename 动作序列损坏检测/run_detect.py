@@ -26,6 +26,7 @@ for _p in (_PROJECT_ROOT, _SCRIPT_DIR):
         sys.path.insert(0, _p)
 # endregion
 
+import torch  # type: ignore[import-untyped]
 from tqdm import tqdm  # 进度条显示
 
 # 从同目录下的模块导入：数据加载器、检测工具函数
@@ -35,6 +36,7 @@ from detect_corrupt_utils import (
     compute_reconstruction_error, # 计算重构误差
     detect_corrupt_per_frame,     # 帧级检测，返回损坏区间
     load_detector,                # 加载预训练 FSQ-VQ-VAE 模型
+    save_detection_visualizations,  # 保存输入与重建动作视频
 )
 
 
@@ -49,6 +51,9 @@ def run_batch_detect(
     batch_size: int = 1,       # 批大小，建议 1（因为不同序列长度可能不同，pad 后 batch>1 也可）
     device: Optional[str] = None,  # 计算设备，None 表示自动选 cuda/cpu
     frame_level: bool = False,  # 是否启用帧级检测：True 时输出损坏帧区间，False 时只输出整段是否损坏
+    output_dir: Optional[str] = None,  # 可视化输出根目录，--visualize 时使用
+    visualize: bool = False,   # 是否保存输入与重建动作视频
+    vis_fps: int = 30,         # 可视化视频帧率
     **dataset_kwargs,          # 其他参数会传给 create_dataloader（如 motion_type, unit_length, min_length, recursive）
 ) -> None:
     """
@@ -72,6 +77,12 @@ def run_batch_detect(
 
     # 确保输出 CSV 所在目录存在，os.path.dirname(output_csv) 可能为空则用 "."
     os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
+
+    # 可视化输出目录：visualize 时若未指定 output_dir 则用 output_csv 所在目录
+    vis_output_dir = output_dir if output_dir else os.path.dirname(output_csv) or "."
+    if visualize:
+        os.makedirs(vis_output_dir, exist_ok=True)
+
     # 以写模式打开 CSV，newline="" 避免 Windows 下多空行，encoding="utf-8" 支持中文
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -102,6 +113,19 @@ def run_batch_detect(
                 m = motion[i : i + 1]
                 # 对应文件名，若 names 长度不足则用索引代替
                 name = names[i] if i < len(names) else str(i)
+                # 去掉 .npy 后缀作为文件夹名
+                name_stem = name[:-4] if name.endswith(".npy") else name
+
+                # 可视化：保存输入与重建动作视频到 output_dir/{name}/
+                if visualize:
+                    dev = next(net.parameters()).device
+                    with torch.no_grad():
+                        rec, _, _, _, _ = net(m.to(dev))
+                    save_detection_visualizations(
+                        m, rec, name_stem, vis_output_dir,
+                        dataset.mean, dataset.std, fps=vis_fps,
+                    )
+
                 if frame_level:
                     # 帧级检测：返回 (每帧误差, 损坏掩码, 区间字符串)
                     # 这里只用 intervals_str，如 "[1,17],[22,78]" 或 "[]"
@@ -221,6 +245,24 @@ def main() -> None:
         action="store_true",
         help="启用帧级检测，输出损坏帧区间（如 [1,17],[22,78]）",
     )
+    # 可视化：保存输入与重建动作视频
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="可视化输出根目录，--visualize 时使用；未指定则使用 output-csv 所在目录",
+    )
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="保存输入与重建动作视频到 output/{name}/input.mp4 与 reconstructed.mp4",
+    )
+    parser.add_argument(
+        "--vis-fps",
+        type=int,
+        default=30,
+        help="可视化视频帧率",
+    )
     # 解析命令行，得到 args 对象
     args = parser.parse_args()
 
@@ -247,6 +289,9 @@ def main() -> None:
         batch_size=args.batch_size,
         device=args.device,
         frame_level=args.frame_level,
+        output_dir=args.output,
+        visualize=args.visualize,
+        vis_fps=args.vis_fps,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
         min_length=args.min_length,

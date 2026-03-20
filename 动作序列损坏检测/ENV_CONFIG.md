@@ -43,7 +43,19 @@
 | kernel_size | 3 | |
 | depth | 3 | |
 
-## 1.4 目录结构
+## 1.4 可视化依赖（可选）
+
+使用 `--visualize` 时需安装以下依赖：
+
+| 依赖 | 说明 |
+|------|------|
+| imageio | 视频保存 |
+| matplotlib | 3D 骨骼绘制 |
+| visualize.smplx2joints | 项目内 SMPL-X 关节转换（依赖 SMPL-X、CUDA 等） |
+
+若未安装或导入失败，可视化会跳过并打印警告，不影响检测/生成主流程。
+
+## 1.5 目录结构
 
 ```
 MotionMillion-Codes/
