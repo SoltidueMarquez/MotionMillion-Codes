@@ -328,10 +328,12 @@ def run_generate(
                 min(max_interval, mlen - 2),
             )
             aug_interval = random.randint(0, mlen - aug_length)
-            gt_intervals_0based.append((aug_interval, aug_interval + aug_length - 1))
             aug_types = random.sample(CORRUPT_TYPES, random.randint(1, len(CORRUPT_TYPES)))
             for aug_type in aug_types:
                 corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
+            # drifting 会将漂移传播到序列末尾，GT 需包含受影响的后续帧
+            gt_end = mlen - 1 if "drifting" in aug_types else aug_interval + aug_length - 1
+            gt_intervals_0based.append((aug_interval, gt_end))
 
         # 计算相对路径
         try:
