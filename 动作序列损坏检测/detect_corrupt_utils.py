@@ -385,10 +385,55 @@ def detect_corrupt_per_frame(
 
 
 # region 动作可视化
+def _draw_annotation_overlay(
+    frames: np.ndarray,
+    gt_corrupt_mask: Optional[np.ndarray],
+    detected_corrupt_mask: Optional[np.ndarray],
+) -> np.ndarray:
+    """
+    在每帧左上角叠加 GT/Det 标注文本。
+    frames: (T, H, W, C), C 为 3 或 4
+    """
+    if gt_corrupt_mask is None and detected_corrupt_mask is None:
+        return frames
+    try:
+        import cv2
+    except ImportError:
+        return frames
+
+    T = frames.shape[0]
+    out = np.array(frames, dtype=np.uint8, copy=True)
+    has_alpha = out.shape[-1] == 4
+    for i in range(T):
+        frame = out[i]
+        rgb = frame[..., :3] if has_alpha else frame
+        frame_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+        parts = [f"Frame {i}"]
+        if gt_corrupt_mask is not None and i < len(gt_corrupt_mask):
+            parts.append(f"GT: {'corrupt' if gt_corrupt_mask[i] else 'OK'}")
+        if detected_corrupt_mask is not None and i < len(detected_corrupt_mask):
+            parts.append(f"Det: {'corrupt' if detected_corrupt_mask[i] else 'OK'}")
+        text = " | ".join(parts)
+
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(frame_bgr, (5, 5), (15 + tw, 15 + th), (40, 40, 40), -1)
+        cv2.putText(frame_bgr, text, (10, 10 + th), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        rgb_out = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        if has_alpha:
+            out[i] = np.dstack([rgb_out, frame[..., 3]])
+        else:
+            out[i] = rgb_out
+    return out
+
+
 def visualize_motion_vector272(
     motion_denorm: np.ndarray,
     output_path: str,
     fps: int = 30,
+    gt_corrupt_mask: Optional[np.ndarray] = None,
+    detected_corrupt_mask: Optional[np.ndarray] = None,
 ) -> bool:
     """
     将已反标准化的 vector_272 动作序列可视化为视频并保存。
@@ -400,6 +445,8 @@ def visualize_motion_vector272(
         motion_denorm: 已反标准化的 motion (T, 272) 或 (1, T, 272)
         output_path: 输出视频路径，建议 .mp4
         fps: 视频帧率
+        gt_corrupt_mask: 可选，(T,) bool，GT 标注的损坏帧
+        detected_corrupt_mask: 可选，(T,) bool，检测判定的损坏帧
 
     Returns:
         True 若成功，False 若失败（不抛出异常）
@@ -447,7 +494,9 @@ def visualize_motion_vector272(
             os.makedirs(out_dir, exist_ok=True)
 
         img = plot_3d_motion([xyz, None, None])
-        imageio.mimsave(output_path, np.array(img), fps=fps)
+        frames = np.array(img, dtype=np.uint8)
+        frames = _draw_annotation_overlay(frames, gt_corrupt_mask, detected_corrupt_mask)
+        imageio.mimsave(output_path, frames, fps=fps)
         return True
     except Exception as e:
         import warnings
@@ -463,6 +512,8 @@ def save_detection_visualizations(
     mean: np.ndarray,
     std: np.ndarray,
     fps: int = 30,
+    gt_corrupt_mask: Optional[np.ndarray] = None,
+    detected_corrupt_mask: Optional[np.ndarray] = None,
 ) -> bool:
     """
     保存检测时的输入与重建动作视频到 output_dir/{name}/input.mp4 与 reconstructed.mp4。
@@ -478,6 +529,8 @@ def save_detection_visualizations(
         mean: 272 维均值
         std: 272 维标准差
         fps: 视频帧率
+        gt_corrupt_mask: 可选，GT 标注的损坏帧 (T,) bool
+        detected_corrupt_mask: 可选，检测判定的损坏帧 (T,) bool
 
     Returns:
         True 若至少一个视频保存成功，否则 False
@@ -497,10 +550,12 @@ def save_detection_visualizations(
         os.makedirs(folder, exist_ok=True)
 
         ok1 = visualize_motion_vector272(
-            motion_denorm, os.path.join(folder, "input.mp4"), fps=fps
+            motion_denorm, os.path.join(folder, "input.mp4"), fps=fps,
+            gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
         )
         ok2 = visualize_motion_vector272(
-            rec_denorm, os.path.join(folder, "reconstructed.mp4"), fps=fps
+            rec_denorm, os.path.join(folder, "reconstructed.mp4"), fps=fps,
+            gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
         )
         return ok1 or ok2
     except Exception as e:

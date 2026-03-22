@@ -13,7 +13,7 @@ import csv        # 读写 CSV 文件
 import os         # 路径、目录操作
 import sys        # 修改 sys.path 以导入项目模块
 from pathlib import Path
-from typing import Optional  # 可选类型，如 Optional[str] 表示 str 或 None
+from typing import Dict, Optional, Tuple  # 可选类型，如 Optional[str] 表示 str 或 None
 
 # region 路径配置
 # 获取本脚本所在目录的绝对路径（即 动作序列损坏检测/）
@@ -38,6 +38,7 @@ from detect_corrupt_utils import (
     load_detector,                # 加载预训练 FSQ-VQ-VAE 模型
     save_detection_visualizations,  # 保存输入与重建动作视频
 )
+from evaluate_detect import load_gt_csv, parse_intervals_to_mask
 
 
 # region 批量检测逻辑
@@ -54,6 +55,7 @@ def run_batch_detect(
     output_dir: Optional[str] = None,  # 可视化输出根目录，--visualize-num 时使用
     visualize_num: int = 0,    # 仅对前 N 个样本做可视化，0 表示不可视化
     vis_fps: int = 30,         # 可视化视频帧率
+    gt_csv_path: Optional[str] = None,  # GT 标注文件路径，未提供则不做 GT 叠加
     **dataset_kwargs,          # 其他参数会传给 create_dataloader（如 motion_type, unit_length, min_length, recursive）
 ) -> None:
     """
@@ -82,6 +84,11 @@ def run_batch_detect(
     vis_output_dir = output_dir if output_dir else os.path.dirname(output_csv) or "."
     if visualize_num > 0:
         os.makedirs(vis_output_dir, exist_ok=True)
+
+    # 加载 GT 标注（用于可视化叠加）
+    gt_dict: Dict[str, Tuple[str, int]] = {}
+    if gt_csv_path and os.path.exists(gt_csv_path):
+        gt_dict = load_gt_csv(gt_csv_path)
 
     # 以写模式打开 CSV，newline="" 避免 Windows 下多空行，encoding="utf-8" 支持中文
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
@@ -122,9 +129,21 @@ def run_batch_detect(
                     dev = next(net.parameters()).device
                     with torch.no_grad():
                         rec, _, _, _, _ = net(m.to(dev))
+                    _, corrupt_mask, _ = detect_corrupt_per_frame(
+                        net, m, threshold, metric=metric, device=None
+                    )
+                    detected_mask = corrupt_mask.cpu().numpy()
+                    gt_mask = None
+                    name_norm = name_stem.replace("\\", "/")
+                    if name_norm in gt_dict:
+                        gt_intervals, _ = gt_dict[name_norm]
+                        T = m.shape[1]
+                        gt_mask = parse_intervals_to_mask(gt_intervals, T)
                     save_detection_visualizations(
                         m, rec, name_stem, vis_output_dir,
                         dataset.mean, dataset.std, fps=vis_fps,
+                        gt_corrupt_mask=gt_mask,
+                        detected_corrupt_mask=detected_mask,
                     )
                 sample_idx += 1
 
@@ -266,6 +285,12 @@ def main() -> None:
         default=30,
         help="可视化视频帧率",
     )
+    parser.add_argument(
+        "--gt-csv",
+        type=str,
+        default=None,
+        help="ground_truth_intervals.csv 路径（generate_corrupt_data 输出），提供则在视频中叠加 GT 标注",
+    )
     # 解析命令行，得到 args 对象
     args = parser.parse_args()
 
@@ -295,6 +320,7 @@ def main() -> None:
         output_dir=args.output,
         visualize_num=args.visualize_num,
         vis_fps=args.vis_fps,
+        gt_csv_path=args.gt_csv,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
         min_length=args.min_length,
