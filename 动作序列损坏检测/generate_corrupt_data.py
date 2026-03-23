@@ -48,8 +48,8 @@ HML_LOWER_BODY_JOINTS = [0, 1, 2, 4, 5, 7, 8, 10, 11]  # pelvis, hips, knees, an
 HML_LEFT_LEG_JOINTS = [1, 4, 7, 10]   # left_hip, left_knee, left_ankle, left_foot
 HML_RIGHT_LEG_JOINTS = [2, 5, 8, 11]  # right_hip, right_knee, right_ankle, right_foot
 
-CORRUPT_TYPES = ["jittering", "foot sliding", "over smooth", "drifting"]
-
+# CORRUPT_TYPES = ["jittering", "foot sliding", "over smooth", "drifting"]
+CORRUPT_TYPES = ["jittering", "over smooth"]
 
 def _get_joint_indices_for_jittering() -> List[int]:
     """随机选择要施加 jittering 的关节子集"""
@@ -103,29 +103,29 @@ def _apply_jittering(
         )
         motion[s:e, j_start:j_end] += noise
 
-    # 25% 概率额外做高斯平滑
+    # 25% 概率额外做高斯平滑（与 StableMotion 一致，只写回区间 [s,e]）
     if np.random.random() < 0.25:
         truncate = 6 * (np.random.random() * 2 + 2) / 4  # 等价于 radius/sigma，sigma=4
         for j in joints_selected:
             j_start = 8 + j * 3
             j_end = j_start + 3
-            motion[:, j_start:j_end] = gaussian_filter1d(
+            motion[s:e, j_start:j_end] = gaussian_filter1d(
                 motion[:, j_start:j_end],
                 sigma=4,
                 axis=0,
                 truncate=truncate,
                 mode="nearest",
-            )
+            )[s:e]
         for j in joints_selected:
             j_start = 140 + j * 6
             j_end = j_start + 6
-            motion[:, j_start:j_end] = gaussian_filter1d(
+            motion[s:e, j_start:j_end] = gaussian_filter1d(
                 motion[:, j_start:j_end],
                 sigma=4,
                 axis=0,
                 truncate=truncate,
                 mode="nearest",
-            )
+            )[s:e]
 
 
 def _apply_over_smooth(
@@ -331,8 +331,9 @@ def run_generate(
             aug_types = random.sample(CORRUPT_TYPES, random.randint(1, len(CORRUPT_TYPES)))
             for aug_type in aug_types:
                 corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
-            # drifting 会将漂移传播到序列末尾，GT 需包含受影响的后续帧
-            gt_end = mlen - 1 if "drifting" in aug_types else aug_interval + aug_length - 1
+            # drifting 与 foot sliding 都会使根位移传播到序列末尾
+            propagates_to_end = "drifting" in aug_types or "foot sliding" in aug_types
+            gt_end = mlen - 1 if propagates_to_end else aug_interval + aug_length - 1
             gt_intervals_0based.append((aug_interval, gt_end))
 
         # 计算相对路径
