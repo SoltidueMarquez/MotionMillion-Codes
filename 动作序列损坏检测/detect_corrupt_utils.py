@@ -265,6 +265,49 @@ def compute_reconstruction_error_per_frame(
     return err
 
 
+def pin_motion_to_origin(
+    motion: Union[torch.Tensor, np.ndarray],
+    mean: Optional[Union[torch.Tensor, np.ndarray]] = None,
+    std: Optional[Union[torch.Tensor, np.ndarray]] = None,
+) -> Union[torch.Tensor, np.ndarray]:
+    """
+    将动作钉在原地：去除根节点位移和朝向变化。
+    支持 torch.Tensor (b, T, 272) 或 np.ndarray (T, 272)。
+    如果提供了 mean 和 std，则在标准化空间进行 pinning。
+    """
+    is_torch = isinstance(motion, torch.Tensor)
+    identity_6d = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+
+    if is_torch:
+        device = motion.device
+        dtype = motion.dtype
+        # 如果是 float16/bfloat16，可能需要转为 float32 处理
+        id_6d = torch.tensor(identity_6d, device=device, dtype=dtype)
+        if mean is not None:
+            # 在标准化空间进行 pinning
+            m = torch.as_tensor(mean, device=device, dtype=dtype)
+            s = torch.as_tensor(std, device=device, dtype=dtype)
+            v_root = (torch.zeros(2, device=device, dtype=dtype) - m[0:2]) / s[0:2]
+            v_head = (id_6d - m[2:8]) / s[2:8]
+            motion[..., 0:2] = v_root
+            motion[..., 2:8] = v_head
+        else:
+            # 在原始空间或假设 mean=0/std=1 空间
+            motion[..., 0:2] = 0.0
+            motion[..., 2:8] = id_6d
+    else:
+        if mean is not None:
+            v_root = (np.zeros(2) - mean[0:2]) / std[0:2]
+            v_head = (np.array(identity_6d) - mean[2:8]) / std[2:8]
+            motion[..., 0:2] = v_root
+            motion[..., 2:8] = v_head
+        else:
+            motion[..., 0:2] = 0.0
+            motion[..., 2:8] = np.array(identity_6d, dtype=np.float32)
+
+    return motion
+
+
 def get_vector272_part_indices() -> List[List[int]]:
     """
     获取 vector_272 各个部位的索引列表。
@@ -314,6 +357,9 @@ def compute_reconstruction_error_per_part(
     net: torch.nn.Module,
     motion: Union[torch.Tensor, np.ndarray],
     device: Optional[torch.device] = None,
+    pin_to_origin: bool = False,
+    mean: Optional[Union[torch.Tensor, np.ndarray]] = None,
+    std: Optional[Union[torch.Tensor, np.ndarray]] = None,
 ) -> torch.Tensor:
     """
     计算每帧各个部位的重构误差。
@@ -331,6 +377,12 @@ def compute_reconstruction_error_per_part(
 
     with torch.no_grad():
         rec, _, _, _, _ = net(motion)
+        
+        # 如果开启原地化，清除根节点位移带来的误差
+        if pin_to_origin:
+            motion = pin_motion_to_origin(motion.clone(), mean, std)
+            rec = pin_motion_to_origin(rec, mean, std)
+
         # (b, T, 272)
         err_full = torch.nn.functional.mse_loss(rec, motion, reduction="none")
 
@@ -848,6 +900,7 @@ def save_detection_visualizations(
     detected_corrupt_mask: Optional[np.ndarray] = None,
     overlay: bool = False,
     per_part_errors: Optional[np.ndarray] = None,
+    pin_to_origin: bool = False,
 ) -> bool:
     """
     保存检测时的输入与重建动作视频。
@@ -870,11 +923,14 @@ def save_detection_visualizations(
         detected_corrupt_mask: 可选，检测判定的损坏帧 (T,) bool
         overlay: 是否采用重叠可视化模式
         per_part_errors: (T, 7) 各部位每帧误差，overlay=True 时使用
-
-    Returns:
-        True 若至少一个视频保存成功，否则 False
+        pin_to_origin: 是否在可视化前将动作钉在原地
     """
     try:
+        # 在反标准化前（或反标准化后均可，pin_motion_to_origin 支持两种）执行 pinning
+        if pin_to_origin:
+            motion = pin_motion_to_origin(motion.clone() if hasattr(motion, "clone") else motion.copy(), mean, std)
+            rec = pin_motion_to_origin(rec.clone() if hasattr(rec, "clone") else rec.copy(), mean, std)
+
         motion_np = motion.cpu().numpy() if isinstance(motion, torch.Tensor) else np.asarray(motion)
         rec_np = rec.cpu().numpy() if isinstance(rec, torch.Tensor) else np.asarray(rec)
         if motion_np.ndim == 3:

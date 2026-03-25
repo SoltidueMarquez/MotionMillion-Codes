@@ -50,6 +50,7 @@ def collect_part_errors_analysis(
     vis_output_dir: Optional[str] = None,
     mean: Optional[np.ndarray] = None,
     std: Optional[np.ndarray] = None,
+    pin_to_origin: bool = False,
     **dataset_kwargs,
 ) -> Tuple[np.ndarray, List[np.ndarray], List[str]]:
     """
@@ -70,7 +71,7 @@ def collect_part_errors_analysis(
     per_sequence_part_errors = []
     filenames = []
 
-    if visualize_num > 0 and (mean is None or std is None):
+    if mean is None or std is None:
         mean, std = dataset.mean, dataset.std
 
     sample_idx = 0
@@ -81,7 +82,9 @@ def collect_part_errors_analysis(
         
         # 计算每帧每个部位的误差
         # (T, 7)
-        err_parts = compute_reconstruction_error_per_part(net, motion)
+        err_parts = compute_reconstruction_error_per_part(
+            net, motion, pin_to_origin=pin_to_origin, mean=mean, std=std
+        )
         err_np = err_parts.cpu().numpy()
         per_sequence_part_errors.append(err_np)
         filenames.append(name)
@@ -92,9 +95,18 @@ def collect_part_errors_analysis(
             with torch.no_grad():
                 rec, _, _, _, _ = net(motion.to(dev))
             
+            # 如果开启原地化，反标准化前进行处理
+            if pin_to_origin:
+                from detect_corrupt_utils import pin_motion_to_origin
+                motion_pinned = pin_motion_to_origin(motion.clone(), mean, std)
+                rec_pinned = pin_motion_to_origin(rec.clone(), mean, std)
+            else:
+                motion_pinned = motion
+                rec_pinned = rec
+
             # 反标准化
-            motion_np = motion.squeeze(0).cpu().numpy()
-            rec_np = rec.squeeze(0).cpu().numpy()
+            motion_np = motion_pinned.squeeze(0).cpu().numpy()
+            rec_np = rec_pinned.squeeze(0).cpu().numpy()
             motion_denorm = motion_np * std + mean
             rec_denorm = rec_np * std + mean
             
@@ -400,6 +412,11 @@ def main() -> None:
         default=0,
         help="仅对前 N 个样本做可视化，0 表示不可视化",
     )
+    parser.add_argument(
+        "--pin-to-origin",
+        action="store_true",
+        help="开启原地化分析：在计算重构误差和可视化时清除根节点位移和朝向变化",
+    )
     parser.add_argument("--output-plot", type=str, default="动作序列损坏检测/calibrate_roc.png")
     parser.add_argument("--output-csv", type=str, default=None, help="保存每样本误差与标签供调试")
     parser.add_argument("--device", type=str, default=None)
@@ -430,6 +447,7 @@ def main() -> None:
                 device=args.device,
                 visualize_num=args.visualize_num,
                 vis_output_dir=vis_dir,
+                pin_to_origin=args.pin_to_origin,
                 **dataset_kwargs,
             )
 
