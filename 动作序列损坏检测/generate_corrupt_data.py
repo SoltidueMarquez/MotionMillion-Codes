@@ -190,6 +190,32 @@ def _apply_drifting(
         motion[e:, IDX_ROOT_VEL] += root_drift_dist[-1:]
 
 
+def pin_motion_to_origin(motion: np.ndarray) -> np.ndarray:
+    """
+    将动作钉在原地：去除根节点位移和朝向变化。
+    
+    vector_272 布局:
+      0:2   根节点水平速度 (velocities_root_xy)
+      2:8   每帧朝向旋转增量 (global_heading_diff_rot, 6D)
+      8:74  去除了朝向的关节位置 (positions_no_heading)
+    """
+    # 1. 清除根节点水平速度 (0:2)
+    motion[:, 0:2] = 0.0
+    
+    # 2. 清除朝向变化 (2:8) -> 设为 6D 单位旋转 [1, 0, 0, 0, 1, 0]
+    # vector_272 存储的是增量旋转 R_diff
+    identity_6d = np.array([1, 0, 0, 0, 1, 0], dtype=np.float32)
+    motion[:, 2:8] = identity_6d
+    
+    # 3. 确保关节位置 (8:74) 中的 Pelvis XZ 为 0
+    # Pelvis 是关节 0, 坐标在 8, 9, 10 (X, Y, Z)
+    # motion[:, 8] = 0.0  # Pelvis X
+    # motion[:, 10] = 0.0 # Pelvis Z
+    # 通常 encode 时已为 0，此处保持现状
+    
+    return motion
+
+
 def corrupt_motion_vector272(
     motion: np.ndarray,
     aug_interval: int,
@@ -277,6 +303,7 @@ def run_generate(
     suffix: str = "_corrupt",
     visualize: bool = False,
     vis_fps: int = 30,
+    pin_to_origin: bool = False,
 ) -> None:
     """
     主流程：遍历文件，施加损坏，保存并生成 corrupt_list.txt。
@@ -284,6 +311,12 @@ def run_generate(
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
+
+    # 开启原地化时过滤掉根节点位移损坏类型
+    current_corrupt_types = CORRUPT_TYPES
+    if pin_to_origin:
+        current_corrupt_types = [t for t in CORRUPT_TYPES if t not in ["foot sliding", "drifting"]]
+        print(f"提示: 原地化已启用。已过滤根节点位移损坏类型。当前可用损坏类型: {current_corrupt_types}")
 
     input_path = Path(input_dir)
     output_path = Path(output_dir)
@@ -315,6 +348,10 @@ def run_generate(
         if mlen < min_length:
             continue
 
+        # 如果开启了原地化，先处理 motion
+        if pin_to_origin:
+            motion = pin_motion_to_origin(motion)
+
         # 随机选择区间数量
         n_intervals = random.randint(num_intervals[0], min(num_intervals[1], mlen // min_interval))
         n_intervals = max(1, n_intervals)
@@ -328,7 +365,7 @@ def run_generate(
                 min(max_interval, mlen - 2),
             )
             aug_interval = random.randint(0, mlen - aug_length)
-            aug_types = random.sample(CORRUPT_TYPES, random.randint(1, len(CORRUPT_TYPES)))
+            aug_types = random.sample(current_corrupt_types, random.randint(1, len(current_corrupt_types)))
             for aug_type in aug_types:
                 corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
             # drifting 与 foot sliding 都会使根位移传播到序列末尾
@@ -342,10 +379,14 @@ def run_generate(
         except ValueError:
             rel = fp.name
 
-        # 复制原始文件到 output_dir，供 good-list 使用（calibrate_threshold 需同一 motion-dir）
+        # 复制或保存 good 副本到 output_dir
         out_good_full = output_path / rel
         out_good_full.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(fp, out_good_full)
+        if pin_to_origin:
+            # 开启原地化时，保存原地化后的 motion
+            np.save(out_good_full, motion)
+        else:
+            shutil.copy2(fp, out_good_full)
 
         # 输出损坏文件，加 _corrupt 后缀
         stem = rel.stem
@@ -474,6 +515,11 @@ def main() -> None:
         default=30,
         help="可视化视频帧率",
     )
+    parser.add_argument(
+        "--pin-to-origin",
+        action="store_true",
+        help="开启原地化：生成数据时清除根节点位移和朝向变化，使动作停留在原点",
+    )
     args = parser.parse_args()
 
     num_lo, num_hi = map(int, args.num_intervals.split(","))
@@ -492,6 +538,7 @@ def main() -> None:
         suffix=args.suffix,
         visualize=args.visualize,
         vis_fps=args.vis_fps,
+        pin_to_origin=args.pin_to_origin,
     )
 
 

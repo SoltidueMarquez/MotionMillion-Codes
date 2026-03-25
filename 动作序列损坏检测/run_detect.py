@@ -34,6 +34,7 @@ from dataset_corrupt_detection import create_dataloader
 from detect_corrupt_utils import (
     compute_quantization_error,   # 计算量化误差
     compute_reconstruction_error, # 计算重构误差
+    compute_reconstruction_error_per_part, # 各部位重构误差分析
     detect_corrupt_per_frame,     # 帧级检测，返回损坏区间
     load_detector,                # 加载预训练 FSQ-VQ-VAE 模型
     save_detection_visualizations,  # 保存输入与重建动作视频
@@ -47,7 +48,7 @@ def run_batch_detect(
     output_csv: str,           # 输出 CSV 文件路径
     ckpt_path: str,            # 预训练模型权重路径（fsq_net_6000000.pth）
     threshold: float = 0.1,    # 判定阈值：误差超过此值则判为损坏
-    metric: str = "recon",     # 检测指标：'recon'=重构误差，'quant'=量化误差
+    metric: Literal["recon", "quant"] = "recon",     # 检测指标：'recon'=重构误差，'quant'=量化误差
     file_list_path: Optional[str] = None,  # 可选：指定 txt 文件，每行一个相对路径，不提供则扫描 motion_dir
     batch_size: int = 1,       # 批大小，建议 1（因为不同序列长度可能不同，pad 后 batch>1 也可）
     device: Optional[str] = None,  # 计算设备，None 表示自动选 cuda/cpu
@@ -56,6 +57,7 @@ def run_batch_detect(
     visualize_num: int = 0,    # 仅对前 N 个样本做可视化，0 表示不可视化
     vis_fps: int = 30,         # 可视化视频帧率
     gt_csv_path: Optional[str] = None,  # GT 标注文件路径，未提供则不做 GT 叠加
+    overlay: bool = False,     # 是否采用重叠可视化模式（输入与重建叠加，显示部位误差）
     **dataset_kwargs,          # 其他参数会传给 create_dataloader（如 motion_type, unit_length, min_length, recursive）
 ) -> None:
     """
@@ -93,6 +95,7 @@ def run_batch_detect(
     # 以写模式打开 CSV，newline="" 避免 Windows 下多空行，encoding="utf-8" 支持中文
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
+        compute_fn = None
         if frame_level:
             # 帧级模式：表头为 文件名、损坏帧区间、整段平均误差
             writer.writerow(["name", "corrupt_intervals", "mean_error"])
@@ -124,11 +127,13 @@ def run_batch_detect(
                 # 去掉 .npy 后缀作为文件夹名
                 name_stem = name[:-4] if name.endswith(".npy") else name
 
-                # 可视化：仅对前 visualize_num 个样本保存输入与重建动作视频
+                # 可视化：仅对前 visualize_num 个样本保存视频
                 if visualize_num > 0 and sample_idx < visualize_num:
                     dev = next(net.parameters()).device
                     with torch.no_grad():
                         rec, _, _, _, _ = net(m.to(dev))
+                    
+                    # 损坏标记
                     _, corrupt_mask, _ = detect_corrupt_per_frame(
                         net, m, threshold, metric=metric, device=None
                     )
@@ -139,11 +144,20 @@ def run_batch_detect(
                         gt_intervals, _ = gt_dict[name_norm]
                         T = m.shape[1]
                         gt_mask = parse_intervals_to_mask(gt_intervals, T)
+                    
+                    # 各部位误差（用于叠加模式）
+                    err_parts_np = None
+                    if overlay:
+                        err_parts = compute_reconstruction_error_per_part(net, m)
+                        err_parts_np = err_parts.cpu().numpy()
+
                     save_detection_visualizations(
                         m, rec, name_stem, vis_output_dir,
                         dataset.mean, dataset.std, fps=vis_fps,
                         gt_corrupt_mask=gt_mask,
                         detected_corrupt_mask=detected_mask,
+                        overlay=overlay,
+                        per_part_errors=err_parts_np,
                     )
                 sample_idx += 1
 
@@ -291,6 +305,12 @@ def main() -> None:
         default=None,
         help="ground_truth_intervals.csv 路径（generate_corrupt_data 输出），提供则在视频中叠加 GT 标注",
     )
+    # 叠加可视化：输入与重建重叠，并标注各部位误差
+    parser.add_argument(
+        "--overlay",
+        action="store_true",
+        help="是否采用重叠可视化模式（输入与重建叠加，显示部位误差）",
+    )
     # 解析命令行，得到 args 对象
     args = parser.parse_args()
 
@@ -321,6 +341,7 @@ def main() -> None:
         visualize_num=args.visualize_num,
         vis_fps=args.vis_fps,
         gt_csv_path=args.gt_csv,
+        overlay=args.overlay,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
         min_length=args.min_length,

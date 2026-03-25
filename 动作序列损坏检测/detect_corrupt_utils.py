@@ -558,6 +558,8 @@ def visualize_motion_overlay_vector272(
     per_frame_errors: Optional[np.ndarray] = None,
     fps: int = 30,
     title: str = "Original (Blue) vs Reconstructed (Red)",
+    gt_corrupt_mask: Optional[np.ndarray] = None,
+    detected_corrupt_mask: Optional[np.ndarray] = None,
 ) -> bool:
     """
     将原始动作与重建动作重叠可视化。
@@ -582,6 +584,10 @@ def visualize_motion_overlay_vector272(
         T = motion_orig.shape[0]
         
         # 计算序列统计信息用于自适应异常检测
+        part_medians = None
+        part_mads = None
+        diff_medians = None
+        diff_mads = None
         if per_frame_errors is not None:
             # 使用稳健统计量 (Median/MAD) 替代 Mean/Std，防止离群值掩盖真实异常
             # 每个部位的统计信息
@@ -611,41 +617,47 @@ def visualize_motion_overlay_vector272(
         
         # 渲染循环
         frames = []
-        fig = plt.figure(figsize=(10, 10), dpi=96)
+        # 提高 DPI 使骨骼更清晰
+        fig = plt.figure(figsize=(10, 10), dpi=120)
         
-        # 计算全局坐标范围以固定视角
-        all_joints = np.concatenate([joints_orig, joints_rec], axis=0)
-        mins = all_joints.min(axis=(0, 1))
-        maxs = all_joints.max(axis=(0, 1))
-        limit = max(np.abs(mins).max(), np.abs(maxs).max()) * 1.1
-
         for t in range(T):
             fig.clf()
             ax = fig.add_subplot(111, projection='3d')
-            ax.set_xlim3d([-limit, limit])
-            ax.set_ylim3d([-limit, limit])
-            ax.set_zlim3d([0, limit * 2]) # 简单假设 z 为高度
+            
+            # 让视角跟随原始动作的根节点，实现自动缩放和中心化
+            root = joints_orig[t, 0]
+            # view_radius 决定了缩放程度。2.0 米半径能看清全身动作
+            view_radius = 2.0
+            
+            ax.set_xlim3d([root[0] - view_radius, root[0] + view_radius])
+            ax.set_ylim3d([root[1] - view_radius, root[1] + view_radius])
+            # 假设 Z 是高度方向
+            ax.set_zlim3d([0, view_radius * 2])
+            
             ax.view_init(elev=20, azim=-90)
             ax.set_title(title)
             ax.axis('off')
 
-            # 绘制地面 (XZ平面)
-            grid_size = limit
-            xx, yy = np.meshgrid(np.linspace(-grid_size, grid_size, 5), np.linspace(-grid_size, grid_size, 5))
-            ax.plot_surface(xx, yy, np.zeros_like(xx), alpha=0.1, color='gray')
+            # 绘制跟随角色的局部地面网格
+            grid_res = 11
+            grid_x, grid_y = np.meshgrid(
+                np.linspace(root[0] - view_radius, root[0] + view_radius, grid_res),
+                np.linspace(root[1] - view_radius, root[1] + view_radius, grid_res)
+            )
+            ax.plot_surface(grid_x, grid_y, np.zeros_like(grid_x), alpha=0.1, color='gray')
 
-            # 绘制两个骨架
+            # 绘制两个骨架，增加线宽
             for chain in kinetic_chain:
                 # 原始: 蓝色
                 ax.plot(joints_orig[t, chain, 0], joints_orig[t, chain, 1], joints_orig[t, chain, 2], 
-                        linewidth=3.0, color='blue', alpha=0.7, label='Original' if chain == kinetic_chain[0] else "")
+                        linewidth=4.5, color='blue', alpha=0.8, label='Original' if chain == kinetic_chain[0] and t == 0 else "")
                 # 重建: 红色
                 ax.plot(joints_rec[t, chain, 0], joints_rec[t, chain, 1], joints_rec[t, chain, 2], 
-                        linewidth=3.0, color='red', alpha=0.7, label='Reconstructed' if chain == kinetic_chain[0] else "")
+                        linewidth=4.5, color='red', alpha=0.8, label='Reconstructed' if chain == kinetic_chain[0] and t == 0 else "")
             
             # 转为图像
             buf = io.BytesIO()
-            fig.savefig(buf, format='png', dpi=96)
+            fig.savefig(buf, format='png', dpi=120)
             buf.seek(0)
             frame = imageio.imread(buf)
             buf.close()
@@ -689,9 +701,13 @@ def visualize_motion_overlay_vector272(
 
         plt.close(fig)
         
+        # 叠加 GT/Det 标注 (frames 是列表，转成 numpy 数组处理)
+        frames_np = np.array(frames, dtype=np.uint8)
+        frames_np = _draw_annotation_overlay(frames_np, gt_corrupt_mask, detected_corrupt_mask)
+        
         out_dir = os.path.dirname(output_path)
         if out_dir: os.makedirs(out_dir, exist_ok=True)
-        imageio.mimsave(output_path, frames, fps=fps)
+        imageio.mimsave(output_path, frames_np, fps=fps)
         return True
     except Exception as e:
         import traceback
@@ -830,9 +846,14 @@ def save_detection_visualizations(
     fps: int = 30,
     gt_corrupt_mask: Optional[np.ndarray] = None,
     detected_corrupt_mask: Optional[np.ndarray] = None,
+    overlay: bool = False,
+    per_part_errors: Optional[np.ndarray] = None,
 ) -> bool:
     """
-    保存检测时的输入与重建动作视频到 output_dir/{name}/input.mp4 与 reconstructed.mp4。
+    保存检测时的输入与重建动作视频。
+    
+    默认模式：保存到 output_dir/{name}/input.mp4 与 reconstructed.mp4。
+    叠加模式（overlay=True）：保存到 output_dir/{name}/overlay.mp4，原始与重建重叠，并标注部位误差。
 
     motion、rec 为标准化空间，会先 inv_transform 再可视化。
     失败时打印警告并返回 False，不中断流程。
@@ -847,6 +868,8 @@ def save_detection_visualizations(
         fps: 视频帧率
         gt_corrupt_mask: 可选，GT 标注的损坏帧 (T,) bool
         detected_corrupt_mask: 可选，检测判定的损坏帧 (T,) bool
+        overlay: 是否采用重叠可视化模式
+        per_part_errors: (T, 7) 各部位每帧误差，overlay=True 时使用
 
     Returns:
         True 若至少一个视频保存成功，否则 False
@@ -865,15 +888,26 @@ def save_detection_visualizations(
         folder = os.path.join(output_dir, name.replace("\\", "/"))
         os.makedirs(folder, exist_ok=True)
 
-        ok1 = visualize_motion_vector272(
-            motion_denorm, os.path.join(folder, "input.mp4"), fps=fps,
-            gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
-        )
-        ok2 = visualize_motion_vector272(
-            rec_denorm, os.path.join(folder, "reconstructed.mp4"), fps=fps,
-            gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
-        )
-        return ok1 or ok2
+        if overlay:
+            # 重叠可视化模式：仅输出一个视频
+            out_path = os.path.join(folder, "overlay.mp4")
+            return visualize_motion_overlay_vector272(
+                motion_denorm, rec_denorm, out_path,
+                per_frame_errors=per_part_errors, fps=fps,
+                gt_corrupt_mask=gt_corrupt_mask,
+                detected_corrupt_mask=detected_corrupt_mask,
+            )
+        else:
+            # 默认模式：输出两个独立视频
+            ok1 = visualize_motion_vector272(
+                motion_denorm, os.path.join(folder, "input.mp4"), fps=fps,
+                gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
+            )
+            ok2 = visualize_motion_vector272(
+                rec_denorm, os.path.join(folder, "reconstructed.mp4"), fps=fps,
+                gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
+            )
+            return ok1 or ok2
     except Exception as e:
         import warnings
         warnings.warn(f"保存检测可视化失败 {name}: {e}")
