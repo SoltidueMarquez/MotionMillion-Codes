@@ -1,0 +1,6 @@
+{
+  "extraPaths": [
+    "../StableMotion-改进模型训练"
+  ],
+  "reportMissingImports": true
+}

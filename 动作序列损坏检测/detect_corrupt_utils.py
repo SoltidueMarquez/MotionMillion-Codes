@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 from argparse import Namespace
-from typing import Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -265,6 +265,89 @@ def compute_reconstruction_error_per_frame(
     return err
 
 
+def get_vector272_part_indices() -> List[List[int]]:
+    """
+    获取 vector_272 各个部位的索引列表。
+    返回列表的顺序对应: h1, h2L, h2R, h3L, h3R, h4, h
+    与 StableMotion 保持逻辑一致。
+    """
+    # 0..22 joints, 272 dims total
+    def _get_joint_indices(joint_ids):
+        indices = []
+        for jid in joint_ids:
+            # Pos: 8:74 (3*22)
+            indices.extend(range(8 + jid * 3, 8 + (jid + 1) * 3))
+            # Vel: 74:140 (3*22)
+            indices.extend(range(74 + jid * 3, 74 + (jid + 1) * 3))
+            # Rot: 140:272 (6*22)
+            indices.extend(range(140 + jid * 6, 140 + (jid + 1) * 6))
+        return indices
+
+    # h1: Root (trajectory, heading, pelvis pos/vel)
+    h1_ids = list(range(0, 8))  # traj + heading
+    h1_ids.extend(range(8 + 0 * 3, 8 + 1 * 3))  # pelvis pos
+    h1_ids.extend(range(74 + 0 * 3, 74 + 1 * 3))  # pelvis vel
+
+    # h2L: L-Leg (1, 4, 7, 10)
+    h2L_ids = _get_joint_indices([1, 4, 7, 10])
+
+    # h2R: R-Leg (2, 5, 8, 11)
+    h2R_ids = _get_joint_indices([2, 5, 8, 11])
+
+    # h3L: L-Arm (13, 16, 18, 20)
+    h3L_ids = _get_joint_indices([13, 16, 18, 20])
+
+    # h3R: R-Arm (14, 17, 19, 21)
+    h3R_ids = _get_joint_indices([14, 17, 19, 21])
+
+    # h4: Trunk/Head (3, 6, 9, 12, 15) + Pelvis Rot (140:146)
+    h4_ids = _get_joint_indices([3, 6, 9, 12, 15])
+    h4_ids.extend(range(140 + 0 * 6, 140 + 1 * 6))  # pelvis rot
+
+    # h: Overall
+    h_ids = list(range(272))
+
+    return [h1_ids, h2L_ids, h2R_ids, h3L_ids, h3R_ids, h4_ids, h_ids]
+
+
+def compute_reconstruction_error_per_part(
+    net: torch.nn.Module,
+    motion: Union[torch.Tensor, np.ndarray],
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """
+    计算每帧各个部位的重构误差。
+    返回形状 (T, 7)，最后一维对应 h1..h4 (含 L/R) 和 h。
+    """
+    if device is None:
+        device = next(net.parameters()).device
+    if isinstance(motion, np.ndarray):
+        motion = torch.from_numpy(motion).float()
+    motion = motion.to(device)
+    if motion.dim() == 2:
+        motion = motion.unsqueeze(0)
+
+    part_indices = get_vector272_part_indices()
+
+    with torch.no_grad():
+        rec, _, _, _, _ = net(motion)
+        # (b, T, 272)
+        err_full = torch.nn.functional.mse_loss(rec, motion, reduction="none")
+
+        per_part_errors = []
+        for indices in part_indices:
+            # 在指定维度上求均值
+            part_err = err_full[:, :, indices].mean(dim=2)  # (b, T)
+            per_part_errors.append(part_err)
+
+        # (7, b, T) -> (b, T, 7)
+        res = torch.stack(per_part_errors, dim=-1)
+
+    if res.shape[0] == 1:
+        res = res.squeeze(0)  # (T, 7)
+    return res
+
+
 def compute_quantization_error_per_frame(
     net: torch.nn.Module,
     motion: Union[torch.Tensor, np.ndarray],
@@ -385,6 +468,239 @@ def detect_corrupt_per_frame(
 
 
 # region 动作可视化
+def _draw_part_errors_overlay(
+    frame: np.ndarray,
+    errors: np.ndarray,
+    colors: Optional[List[Tuple[int, int, int]]] = None,
+    part_names: List[str] = ["h1", "h2L", "h2R", "h3L", "h3R", "h4", "h"],
+) -> np.ndarray:
+    """
+    在帧的右上角显示各部位的重构误差。
+    frame: (H, W, 3) or (H, W, 4)
+    errors: (7,) 每个部位的误差值
+    colors: (7,) 每个部位对应的颜色 (R, G, B)，若为 None 则默认白色
+    """
+    try:
+        import cv2
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return frame
+
+    h, w = frame.shape[:2]
+    # 在右上角绘制一个半透明背景
+    margin = 10
+    line_h = 25
+    rect_w = 200 # 稍微加宽以适应中文
+    rect_h = line_h * (len(part_names) + 1) + margin
+    
+    top_left = (w - rect_w - margin, margin)
+    bottom_right = (w - margin, margin + rect_h)
+    
+    overlay = frame.copy()
+    cv2.rectangle(overlay, top_left, bottom_right, (40, 40, 40), -1)
+    # 混合原图与矩形，实现半透明 (alpha=0.6)
+    alpha = 0.6
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+    # 使用 PIL 绘制文本以支持中文
+    img_pil = Image.fromarray(frame)
+    draw = ImageDraw.Draw(img_pil)
+    
+    # 尝试加载中文字体，Windows 常见路径
+    font_paths = [
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "D:\\Windows\\Fonts\\simhei.ttf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
+    ]
+    font = None
+    for fp in font_paths:
+        if os.path.exists(fp):
+            try:
+                font = ImageFont.truetype(fp, 16)
+                break
+            except:
+                continue
+    
+    if font is None:
+        font = ImageFont.load_default()
+
+    # 绘制标题
+    draw.text((top_left[0] + 5, top_left[1] + 5), "各部位重构误差 (MSE)", font=font, fill=(220, 220, 220))
+    
+    # 中文名称映射
+    CHINESE_NAMES = {
+        "h1": "根节点",
+        "h2L": "左腿",
+        "h2R": "右腿",
+        "h3L": "左臂",
+        "h3R": "右臂",
+        "h4": "躯干/头",
+        "h": "总体"
+    }
+    
+    default_color = (255, 255, 255) # 改为白色
+    for i, (name, err) in enumerate(zip(part_names, errors)):
+        disp_name = CHINESE_NAMES.get(name, name)
+        text = f"{disp_name}: {err:.6f}"
+        pos = (top_left[0] + 10, top_left[1] + 25 + (i + 1) * (line_h - 2))
+        text_color = colors[i] if colors is not None else default_color
+        # PIL 使用 RGB
+        draw.text(pos, text, font=font, fill=text_color)
+
+    return np.array(img_pil)
+
+
+def visualize_motion_overlay_vector272(
+    motion_orig: np.ndarray,
+    motion_rec: np.ndarray,
+    output_path: str,
+    per_frame_errors: Optional[np.ndarray] = None,
+    fps: int = 30,
+    title: str = "Original (Blue) vs Reconstructed (Red)",
+) -> bool:
+    """
+    将原始动作与重建动作重叠可视化。
+    motion_orig, motion_rec: (T, 272) 已反标准化的动作
+    per_frame_errors: (T, 7) 每帧每个部位的误差值
+    """
+    try:
+        from utils.motion_process import recover_from_local_rotation
+        from visualize.smplx2joints import process_smplx_data
+        import imageio
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        import io
+    except ImportError as e:
+        import warnings
+        warnings.warn(f"可视化依赖未安装，跳过: {e}")
+        return False
+
+    try:
+        T = motion_orig.shape[0]
+        
+        # 计算序列统计信息用于自适应异常检测
+        if per_frame_errors is not None:
+            # 使用稳健统计量 (Median/MAD) 替代 Mean/Std，防止离群值掩盖真实异常
+            # 每个部位的统计信息
+            part_medians = np.median(per_frame_errors, axis=0)
+            part_mads = np.median(np.abs(per_frame_errors - part_medians), axis=0)
+            
+            # 帧间跳变的统计信息 (mutation detection)
+            diffs = np.abs(np.diff(per_frame_errors, axis=0))
+            diff_medians = np.median(diffs, axis=0)
+            diff_mads = np.median(np.abs(diffs - diff_medians), axis=0)
+
+        def _get_joints(m):
+            smpl_85 = recover_from_local_rotation(m, njoint=22)
+            smplx_322 = np.concatenate((
+                smpl_85[:, :66], np.zeros((T, 90)), np.zeros((T, 3)),
+                np.zeros((T, 50)), np.zeros((T, 100)),
+                smpl_85[:, 72:75], smpl_85[:, 75:]
+            ), axis=-1)
+            _, joints, _, _ = process_smplx_data(smplx_322, norm_global_orient=False, transform=False)
+            return joints[:, :22, :].detach().cpu().numpy()
+
+        joints_orig = _get_joints(motion_orig)
+        joints_rec = _get_joints(motion_rec)
+
+        # 动力学链 (SMPL-22)
+        kinetic_chain = [[0, 2, 5, 8, 11], [0, 1, 4, 7, 10], [0, 3, 6, 9, 12, 15], [9, 14, 17, 19, 21], [9, 13, 16, 18, 20]]
+        
+        # 渲染循环
+        frames = []
+        fig = plt.figure(figsize=(10, 10), dpi=96)
+        
+        # 计算全局坐标范围以固定视角
+        all_joints = np.concatenate([joints_orig, joints_rec], axis=0)
+        mins = all_joints.min(axis=(0, 1))
+        maxs = all_joints.max(axis=(0, 1))
+        limit = max(np.abs(mins).max(), np.abs(maxs).max()) * 1.1
+
+        for t in range(T):
+            fig.clf()
+            ax = fig.add_subplot(111, projection='3d')
+            ax.set_xlim3d([-limit, limit])
+            ax.set_ylim3d([-limit, limit])
+            ax.set_zlim3d([0, limit * 2]) # 简单假设 z 为高度
+            ax.view_init(elev=20, azim=-90)
+            ax.set_title(title)
+            ax.axis('off')
+
+            # 绘制地面 (XZ平面)
+            grid_size = limit
+            xx, yy = np.meshgrid(np.linspace(-grid_size, grid_size, 5), np.linspace(-grid_size, grid_size, 5))
+            ax.plot_surface(xx, yy, np.zeros_like(xx), alpha=0.1, color='gray')
+
+            # 绘制两个骨架
+            for chain in kinetic_chain:
+                # 原始: 蓝色
+                ax.plot(joints_orig[t, chain, 0], joints_orig[t, chain, 1], joints_orig[t, chain, 2], 
+                        linewidth=3.0, color='blue', alpha=0.7, label='Original' if chain == kinetic_chain[0] else "")
+                # 重建: 红色
+                ax.plot(joints_rec[t, chain, 0], joints_rec[t, chain, 1], joints_rec[t, chain, 2], 
+                        linewidth=3.0, color='red', alpha=0.7, label='Reconstructed' if chain == kinetic_chain[0] else "")
+            
+            # 转为图像
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', dpi=96)
+            buf.seek(0)
+            frame = imageio.imread(buf)
+            buf.close()
+
+            # 叠加误差信息
+            if per_frame_errors is not None:
+                # 颜色定义 (R, G, B) - 这里的帧是 RGB 格式
+                WHITE = (255, 255, 255) # 默认白色
+                YELLOW = (255, 255, 0)
+                RED = (255, 0, 0)
+                
+                curr_errors = per_frame_errors[t]
+                colors = []
+                for i in range(len(curr_errors)):
+                    err = curr_errors[i]
+                    # 自适应突变检测 (与上一帧对比)
+                    mutation = False
+                    if t > 0:
+                        prev_err = per_frame_errors[t-1, i]
+                        diff = abs(err - prev_err)
+                        # 突变判定：超过跳变中位数的 4.0 倍 MAD (使用更严格的阈值捕捉极端跳变)
+                        if diff > diff_medians[i] + 4.0 * (diff_mads[i] + 1e-6):
+                            mutation = True
+                    
+                    # 自适应大误差检测
+                    large = False
+                    # 大误差判定：超过该序列中位数的 3.0 倍 MAD
+                    if err > part_medians[i] + 3.0 * (part_mads[i] + 1e-6):
+                        large = True
+                    
+                    if mutation:
+                        colors.append(RED)
+                    elif large:
+                        colors.append(YELLOW)
+                    else:
+                        colors.append(WHITE)
+                
+                frame = _draw_part_errors_overlay(frame, curr_errors, colors=colors)
+            
+            frames.append(frame)
+
+        plt.close(fig)
+        
+        out_dir = os.path.dirname(output_path)
+        if out_dir: os.makedirs(out_dir, exist_ok=True)
+        imageio.mimsave(output_path, frames, fps=fps)
+        return True
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        import warnings
+        warnings.warn(f"重叠可视化失败 {output_path}: {e}")
+        return False
+
+
 def _draw_annotation_overlay(
     frames: np.ndarray,
     gt_corrupt_mask: Optional[np.ndarray],

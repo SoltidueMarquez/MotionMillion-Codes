@@ -16,6 +16,7 @@ import sys
 from typing import List, Optional, Tuple
 
 import numpy as np
+import torch
 
 # region 路径配置
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,12 +31,87 @@ from tqdm import tqdm
 from dataset_corrupt_detection import create_dataloader
 from detect_corrupt_utils import (
     compute_quantization_error,
+    compute_quantization_error_per_frame,
     compute_reconstruction_error,
+    compute_reconstruction_error_per_frame,
+    compute_reconstruction_error_per_part,
     load_detector,
+    visualize_motion_overlay_vector272,
 )
 
 
 # region 误差收集
+def collect_part_errors_analysis(
+    motion_dir: str,
+    good_list_path: str,
+    ckpt_path: str,
+    device: Optional[str] = None,
+    visualize_num: int = 0,
+    vis_output_dir: Optional[str] = None,
+    mean: Optional[np.ndarray] = None,
+    std: Optional[np.ndarray] = None,
+    **dataset_kwargs,
+) -> Tuple[np.ndarray, List[np.ndarray], List[str]]:
+    """
+    量化分析：计算每个部位的重构误差。
+    返回: (total_frame_errors, per_sequence_part_errors, filenames)
+    """
+    net, _ = load_detector(ckpt_path, device=device)
+
+    loader, dataset = create_dataloader(
+        motion_dir=motion_dir,
+        file_list_path=good_list_path,
+        batch_size=1,
+        num_workers=0,
+        shuffle=False,
+        **dataset_kwargs,
+    )
+
+    per_sequence_part_errors = []
+    filenames = []
+
+    if visualize_num > 0 and (mean is None or std is None):
+        mean, std = dataset.mean, dataset.std
+
+    sample_idx = 0
+    for batch in tqdm(loader, desc="正在分析各部位 FSQ 重建损坏 (仅完好样本)"):
+        motion, name_list = batch
+        # motion: (1, T, 272)
+        name = name_list[0]
+        
+        # 计算每帧每个部位的误差
+        # (T, 7)
+        err_parts = compute_reconstruction_error_per_part(net, motion)
+        err_np = err_parts.cpu().numpy()
+        per_sequence_part_errors.append(err_np)
+        filenames.append(name)
+
+        # 可视化重叠动作视频
+        if visualize_num > 0 and sample_idx < visualize_num:
+            dev = next(net.parameters()).device
+            with torch.no_grad():
+                rec, _, _, _, _ = net(motion.to(dev))
+            
+            # 反标准化
+            motion_np = motion.squeeze(0).cpu().numpy()
+            rec_np = rec.squeeze(0).cpu().numpy()
+            motion_denorm = motion_np * std + mean
+            rec_denorm = rec_np * std + mean
+            
+            out_name = f"{name}_overlay.mp4"
+            out_path = os.path.join(vis_output_dir or ".", "overlay_viz", out_name)
+            
+            visualize_motion_overlay_vector272(
+                motion_denorm, rec_denorm, out_path,
+                per_frame_errors=err_np, fps=30
+            )
+
+        sample_idx += 1
+
+    total_frame_errors = np.concatenate(per_sequence_part_errors, axis=0)
+    return total_frame_errors, per_sequence_part_errors, filenames
+
+
 def collect_errors(
     motion_dir: str,
     good_list_path: str,
@@ -87,6 +163,68 @@ def collect_errors(
             labels_list.append(label)
 
     return np.array(errors_list), np.array(labels_list)
+
+
+def collect_good_only_errors(
+    motion_dir: str,
+    good_list_path: str,
+    ckpt_path: str,
+    metric: str = "recon",
+    frame_level: bool = False,
+    device: Optional[str] = None,
+    **dataset_kwargs,
+) -> Tuple[np.ndarray, float]:
+    """
+    仅在完好样本上计算误差，返回 (per_sample_errors, max_error)。
+
+    用于「完好视频零误报」标定：阈值取 max_error 可确保完好样本不会被判为损坏。
+    frame_level=True 时采集每帧误差的 max，与 run_detect --frame-level 一致。
+    """
+    net, _ = load_detector(ckpt_path, device=device)
+
+    def _load_file_list(path: str) -> Optional[List[str]]:
+        if not path or not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return [line.strip() for line in f if line.strip()]
+
+    good_list = _load_file_list(good_list_path)
+    if not good_list:
+        raise ValueError("good-list 必须提供且文件存在")
+
+    loader, _ = create_dataloader(
+        motion_dir=motion_dir,
+        file_list_path=good_list_path,
+        batch_size=1,
+        num_workers=0,
+        shuffle=False,
+        **dataset_kwargs,
+    )
+
+    all_errors: List[float] = []
+    per_sample_max: List[float] = []
+
+    for batch in tqdm(loader, desc="采集完好样本误差（good-only 标定）"):
+        motion, _ = batch
+        if frame_level:
+            if metric == "recon":
+                err_tensor = compute_reconstruction_error_per_frame(net, motion)
+            else:
+                err_tensor = compute_quantization_error_per_frame(net, motion)
+            err_np = err_tensor.cpu().numpy().ravel()
+            all_errors.extend(err_np.tolist())
+            per_sample_max.append(float(np.max(err_np)))
+        else:
+            if metric == "recon":
+                err = compute_reconstruction_error(net, motion, reduction="mean")
+            else:
+                err = compute_quantization_error(net, motion, reduction="mean")
+            err_val = err.item() if hasattr(err, "item") else float(err)
+            all_errors.append(err_val)
+            per_sample_max.append(err_val)
+
+    max_error = float(np.max(all_errors))
+    return np.array(per_sample_max), max_error
 # endregion
 
 
@@ -129,11 +267,21 @@ def compute_roc_metrics(
     tpr = np.array(tpr_list)
     fpr = np.array(fpr_list)
 
-    # AUC: 梯形积分。需按 fpr 升序排列，否则 np.trapz 会因 x 递减而得负值
+    # AUC: 梯形积分。需按 fpr 升序排列，否则 np.trapezoid 会因 x 递减而得负值
     order = np.argsort(fpr)
     fpr = fpr[order]
     tpr = tpr[order]
-    auc = np.trapz(tpr, fpr)
+    # np.trapz 在 NumPy 2.0 中被弃用并由 np.trapezoid 取代。
+    # 这里我们优先使用 np.trapezoid 以适应新版 NumPy。
+    if hasattr(np, "trapezoid"):
+        auc_val = np.trapezoid(tpr, fpr)
+    elif hasattr(np, "trapz"):
+        auc_val = getattr(np, "trapz")(tpr, fpr)
+    else:
+        # 手动计算梯形积分作为回退
+        auc_val = np.sum((tpr[1:] + tpr[:-1]) * np.diff(fpr) / 2.0)
+    
+    auc = float(auc_val)
 
     return thresholds, tpr, fpr, auc
 
@@ -217,13 +365,41 @@ def save_roc_plot(
 
 # region 主流程
 def main() -> None:
-    parser = argparse.ArgumentParser(description="阈值标定：在已知完好/损坏样本上评估，输出推荐阈值")
+    parser = argparse.ArgumentParser(
+        description="阈值标定：仅 good-list 时取完好样本最大误差（零误报）；提供 corrupt-list 时用 ROC/F1 评估"
+    )
     parser.add_argument("--motion-dir", type=str, required=True, help="运动文件根目录")
     parser.add_argument("--good-list", type=str, required=True, help="完好样本文件列表 txt")
-
-    parser.add_argument("--corrupt-list", type=str, required=True, help="损坏样本文件列表 txt")
+    parser.add_argument(
+        "--corrupt-list",
+        type=str,
+        default=None,
+        help="损坏样本文件列表 txt；不提供则走 good-only 标定（完好零误报）",
+    )
     parser.add_argument("--ckpt", type=str, default="checkpoints/pretrained_models/fsq_net_6000000.pth")
     parser.add_argument("--metric", choices=["recon", "quant"], default="recon")
+    parser.add_argument(
+        "--frame-level",
+        action="store_true",
+        help="帧级标定，与 run_detect --frame-level 一致；不指定则为序列级",
+    )
+    parser.add_argument(
+        "--margin",
+        type=float,
+        default=0.0,
+        help="阈值安全余量，threshold = max_error + margin，默认 0",
+    )
+    parser.add_argument(
+        "--analyze-parts",
+        action="store_true",
+        help="量化各部位重建损坏（仅 good-list 模式），记录每帧各部位误差",
+    )
+    parser.add_argument(
+        "--visualize-num",
+        type=int,
+        default=0,
+        help="仅对前 N 个样本做可视化，0 表示不可视化",
+    )
     parser.add_argument("--output-plot", type=str, default="动作序列损坏检测/calibrate_roc.png")
     parser.add_argument("--output-csv", type=str, default=None, help="保存每样本误差与标签供调试")
     parser.add_argument("--device", type=str, default=None)
@@ -236,53 +412,133 @@ def main() -> None:
         print(f"错误：检查点不存在 {args.ckpt}")
         sys.exit(1)
 
-    print("正在采集完好与损坏样本的误差...")
-    errors, labels = collect_errors(
-        motion_dir=args.motion_dir,
-        good_list_path=args.good_list,
-        corrupt_list_path=args.corrupt_list,
-        ckpt_path=args.ckpt,
-        metric=args.metric,
-        device=args.device,
-        motion_type=args.motion_type,
-        unit_length=args.unit_length,
-        min_length=args.min_length,
-    )
+    dataset_kwargs = {
+        "motion_type": args.motion_type,
+        "unit_length": args.unit_length,
+        "min_length": args.min_length,
+    }
 
-    n_good = (labels == 0).sum()
-    n_corrupt = (labels == 1).sum()
-    print(f"完好样本数: {n_good}, 损坏样本数: {n_corrupt}")
+    if not args.corrupt_list:
+        if args.analyze_parts:
+            # 量化分析：计算每个部位的重建损坏，记录详细数据
+            print("正在进行各部位重建损坏量化分析（仅完好样本）...")
+            vis_dir = os.path.dirname(args.output_csv) if args.output_csv else None
+            total_frame_errors, per_seq_errors, filenames = collect_part_errors_analysis(
+                motion_dir=args.motion_dir,
+                good_list_path=args.good_list,
+                ckpt_path=args.ckpt,
+                device=args.device,
+                visualize_num=args.visualize_num,
+                vis_output_dir=vis_dir,
+                **dataset_kwargs,
+            )
 
-    if n_good == 0 or n_corrupt == 0:
-        print("错误：完好与损坏样本均需至少 1 个")
-        sys.exit(1)
+            part_names = ["h1", "h2L", "h2R", "h3L", "h3R", "h4", "h"]
+            avg_per_part = total_frame_errors.mean(axis=0)
 
-    # 统计
-    thresholds, tpr, fpr, auc = compute_roc_metrics(errors, labels)
-    best_th, best_f1 = find_best_f1_threshold(errors, labels)
+            print("\n" + "=" * 50)
+            print("各部位 FSQ 重建损坏量化分析结果")
+            print("=" * 50)
+            for i, name in enumerate(part_names):
+                print(f"{name}: mean={avg_per_part[i]:.6f}, std={total_frame_errors[:, i].std():.6f}")
+            print("=" * 50)
 
-    print("\n" + "=" * 50)
-    print("标定结果")
-    print("=" * 50)
-    print(f"metric: {args.metric}")
-    print(f"完好样本误差: mean={errors[labels==0].mean():.6f}, std={errors[labels==0].std():.6f}")
-    print(f"损坏样本误差: mean={errors[labels==1].mean():.6f}, std={errors[labels==1].std():.6f}")
-    print(f"AUC: {auc:.4f}")
-    print(f"推荐阈值（F1 最大）: {best_th:.6f}, F1={best_f1:.4f}")
-    print(f"建议 run_detect 使用: --threshold {best_th:.6f}")
-    print("=" * 50)
+            if args.output_csv:
+                os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
+                with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    # 表头: [file_name, frame_idx, h1, h2L, h2R, h3L, h3R, h4, h]
+                    w.writerow(["file_name", "frame_idx"] + part_names)
+                    for seq_err, fname in zip(per_seq_errors, filenames):
+                        for t in range(len(seq_err)):
+                            row = [fname, t] + [f"{e:.6f}" for e in seq_err[t]]
+                            w.writerow(row)
+                print(f"详细部位误差数据已保存到 {args.output_csv}")
+            return
 
-    if args.output_plot:
-        save_roc_plot(errors, labels, args.output_plot)
+        # good-only 标定：取完好样本最大误差，确保完好视频零误报
+        print("正在采集完好样本误差（good-only 标定，目标：完好视频零误报）...")
+        per_sample_errors, max_error = collect_good_only_errors(
+            motion_dir=args.motion_dir,
+            good_list_path=args.good_list,
+            ckpt_path=args.ckpt,
+            metric=args.metric,
+            frame_level=args.frame_level,
+            device=args.device,
+            **dataset_kwargs,
+        )
+        n_good = len(per_sample_errors)
+        recommended_th = max_error + args.margin
 
-    if args.output_csv:
-        os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
-        with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["error", "label"])
-            for e, l in zip(errors, labels):
-                w.writerow([f"{e:.6f}", l])
-        print(f"每样本误差已保存到 {args.output_csv}")
+        print(f"完好样本数: {n_good}")
+
+        print("\n" + "=" * 50)
+        print("标定结果（good-only）")
+        print("=" * 50)
+        print(f"metric: {args.metric}")
+        print(f"误差粒度: {'帧级' if args.frame_level else '序列级'}")
+        print(f"完好样本误差: mean={per_sample_errors.mean():.6f}, std={per_sample_errors.std():.6f}")
+        print(f"最大误差: {max_error:.6f}")
+        print(f"推荐阈值: {recommended_th:.6f}" + (f" (max + margin={args.margin})" if args.margin else ""))
+        print(f"建议 run_detect 使用: --threshold {recommended_th:.6f}")
+        if args.frame_level:
+            print("（请同时使用 run_detect --frame-level）")
+        print("=" * 50)
+
+        if args.output_csv:
+            os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
+            with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["error", "label"])
+                for e in per_sample_errors:
+                    w.writerow([f"{e:.6f}", 0])
+            print(f"每样本误差已保存到 {args.output_csv}")
+    else:
+        # 双列表 ROC/F1 模式（兼容旧用法）
+        print("正在采集完好与损坏样本的误差...")
+        errors, labels = collect_errors(
+            motion_dir=args.motion_dir,
+            good_list_path=args.good_list,
+            corrupt_list_path=args.corrupt_list,
+            ckpt_path=args.ckpt,
+            metric=args.metric,
+            device=args.device,
+            **dataset_kwargs,
+        )
+
+        n_good = (labels == 0).sum()
+        n_corrupt = (labels == 1).sum()
+        print(f"完好样本数: {n_good}, 损坏样本数: {n_corrupt}")
+
+        if n_good == 0 or n_corrupt == 0:
+            print("错误：完好与损坏样本均需至少 1 个")
+            sys.exit(1)
+
+        thresholds, tpr, fpr, auc = compute_roc_metrics(errors, labels)
+        best_th, best_f1 = find_best_f1_threshold(errors, labels)
+
+        print("\n" + "=" * 50)
+        print("标定结果（ROC/F1）")
+        print("=" * 50)
+        print(f"metric: {args.metric}")
+        print(f"完好样本误差: mean={errors[labels==0].mean():.6f}, std={errors[labels==0].std():.6f}")
+        print(f"损坏样本误差: mean={errors[labels==1].mean():.6f}, std={errors[labels==1].std():.6f}")
+        print(f"AUC: {auc:.4f}")
+        print(f"推荐阈值（F1 最大）: {best_th:.6f}, F1={best_f1:.4f}")
+        print(f"建议 run_detect 使用: --threshold {best_th:.6f}")
+        print("=" * 50)
+
+        if args.output_plot:
+            save_roc_plot(errors, labels, args.output_plot)
+
+        if args.output_csv:
+            os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
+            with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["error", "label"])
+                for e, l in zip(errors, labels):
+                    w.writerow([f"{e:.6f}", l])
+            print(f"每样本误差已保存到 {args.output_csv}")
 # endregion
 
 
