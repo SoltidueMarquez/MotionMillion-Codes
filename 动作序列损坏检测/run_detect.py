@@ -58,6 +58,7 @@ def run_batch_detect(
     vis_fps: int = 30,         # 可视化视频帧率
     gt_csv_path: Optional[str] = None,  # GT 标注文件路径，未提供则不做 GT 叠加
     overlay: bool = False,     # 是否采用重叠可视化模式（输入与重建叠加，显示部位误差）
+    pin_to_origin: bool = False, # 是否开启原地化检测
     **dataset_kwargs,          # 其他参数会传给 create_dataloader（如 motion_type, unit_length, min_length, recursive）
 ) -> None:
     """
@@ -135,7 +136,8 @@ def run_batch_detect(
                     
                     # 损坏标记
                     _, corrupt_mask, _ = detect_corrupt_per_frame(
-                        net, m, threshold, metric=metric, device=None
+                        net, m, threshold, metric=metric, device=None,
+                        pin_to_origin=pin_to_origin, mean=dataset.mean, std=dataset.std
                     )
                     detected_mask = corrupt_mask.cpu().numpy()
                     gt_mask = None
@@ -148,7 +150,9 @@ def run_batch_detect(
                     # 各部位误差（用于叠加模式）
                     err_parts_np = None
                     if overlay:
-                        err_parts = compute_reconstruction_error_per_part(net, m)
+                        err_parts = compute_reconstruction_error_per_part(
+                            net, m, pin_to_origin=pin_to_origin, mean=dataset.mean, std=dataset.std
+                        )
                         err_parts_np = err_parts.cpu().numpy()
 
                     save_detection_visualizations(
@@ -158,6 +162,7 @@ def run_batch_detect(
                         detected_corrupt_mask=detected_mask,
                         overlay=overlay,
                         per_part_errors=err_parts_np,
+                        pin_to_origin=pin_to_origin,
                     )
                 sample_idx += 1
 
@@ -165,11 +170,12 @@ def run_batch_detect(
                     # 帧级检测：返回 (每帧误差, 损坏掩码, 区间字符串)
                     # 这里只用 intervals_str，如 "[1,17],[22,78]" 或 "[]"
                     _, _, intervals_str = detect_corrupt_per_frame(
-                        net, m, threshold, metric=metric, device=None
+                        net, m, threshold, metric=metric, device=None,
+                        pin_to_origin=pin_to_origin, mean=dataset.mean, std=dataset.std
                     )
                     # 计算整段平均误差（用于 CSV 中展示）
                     mean_err = compute_reconstruction_error(
-                        net, m, reduction="mean"
+                        net, m, reduction="mean", pin_to_origin=pin_to_origin, mean=dataset.mean, std=dataset.std
                     ) if metric == "recon" else compute_quantization_error(
                         net, m, reduction="mean"
                     )
@@ -178,7 +184,11 @@ def run_batch_detect(
                     writer.writerow([name, intervals_str, f"{mean_val:.6f}"])
                 else:
                     # 整段检测：计算整段平均误差
-                    err = compute_fn(net, m, reduction="mean")
+                    err = compute_reconstruction_error(
+                        net, m, reduction="mean", pin_to_origin=pin_to_origin, mean=dataset.mean, std=dataset.std
+                    ) if metric == "recon" else compute_quantization_error(
+                        net, m, reduction="mean"
+                    )
                     err_val = err.item() if hasattr(err, "item") else float(err)
                     # 误差超过阈值则判为损坏
                     corrupt = err_val > threshold
@@ -311,6 +321,12 @@ def main() -> None:
         action="store_true",
         help="是否采用重叠可视化模式（输入与重建叠加，显示部位误差）",
     )
+    # 原地化检测：去除根节点位移带来的误差
+    parser.add_argument(
+        "--pin-to-origin",
+        action="store_true",
+        help="开启原地化检测：去除输入与重建动作序列的根节点位移与朝向变化进行误差计算",
+    )
     # 解析命令行，得到 args 对象
     args = parser.parse_args()
 
@@ -342,6 +358,7 @@ def main() -> None:
         vis_fps=args.vis_fps,
         gt_csv_path=args.gt_csv,
         overlay=args.overlay,
+        pin_to_origin=args.pin_to_origin,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
         min_length=args.min_length,

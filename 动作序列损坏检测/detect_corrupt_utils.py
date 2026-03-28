@@ -146,6 +146,9 @@ def compute_reconstruction_error(
     motion: Union[torch.Tensor, np.ndarray],
     device: Optional[torch.device] = None,
     reduction: Literal["mean", "sum", "none"] = "mean",
+    pin_to_origin: bool = False,
+    mean: Optional[Union[torch.Tensor, np.ndarray]] = None,
+    std: Optional[Union[torch.Tensor, np.ndarray]] = None,
 ) -> torch.Tensor:
     """
     计算重构误差 L2(rec_motion, motion)。
@@ -164,6 +167,12 @@ def compute_reconstruction_error(
 
     with torch.no_grad():
         rec, _, _, _, _ = net(motion)
+        
+        # 如果开启原地化，清除根节点位移带来的误差
+        if pin_to_origin:
+            motion = pin_motion_to_origin(motion.clone(), mean, std)
+            rec = pin_motion_to_origin(rec, mean, std)
+
         err = torch.nn.functional.mse_loss(rec, motion, reduction=reduction)
     return err
 # endregion
@@ -241,6 +250,9 @@ def compute_reconstruction_error_per_frame(
     net: torch.nn.Module,
     motion: Union[torch.Tensor, np.ndarray],
     device: Optional[torch.device] = None,
+    pin_to_origin: bool = False,
+    mean: Optional[Union[torch.Tensor, np.ndarray]] = None,
+    std: Optional[Union[torch.Tensor, np.ndarray]] = None,
 ) -> torch.Tensor:
     """
     计算每帧重构误差，返回形状 (T,) 或 (b, T)。
@@ -258,6 +270,12 @@ def compute_reconstruction_error_per_frame(
 
     with torch.no_grad():
         rec, _, _, _, _ = net(motion)
+
+        # 如果开启原地化，清除根节点位移带来的误差
+        if pin_to_origin:
+            motion = pin_motion_to_origin(motion.clone(), mean, std)
+            rec = pin_motion_to_origin(rec, mean, std)
+
         err = torch.nn.functional.mse_loss(rec, motion, reduction="none")  # (b, T, 272)
         err = err.mean(dim=2)  # (b, T)
     if err.shape[0] == 1:
@@ -499,6 +517,9 @@ def detect_corrupt_per_frame(
     threshold: float,
     metric: Literal["recon", "quant"] = "recon",
     device: Optional[torch.device] = None,
+    pin_to_origin: bool = False,
+    mean: Optional[Union[torch.Tensor, np.ndarray]] = None,
+    std: Optional[Union[torch.Tensor, np.ndarray]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, str]:
     """
     帧级检测：返回每帧误差、损坏掩码、损坏区间字符串。
@@ -509,8 +530,9 @@ def detect_corrupt_per_frame(
         intervals_str: 如 "[1,17],[22,78]" 或 "[]"
     """
     if metric == "recon":
-        per_frame_err = compute_reconstruction_error_per_frame(net, motion, device)
+        per_frame_err = compute_reconstruction_error_per_frame(net, motion, device, pin_to_origin, mean, std)
     else:
+        # 量化误差不涉及反标准化后的位移清除
         per_frame_err = compute_quantization_error_per_frame(net, motion, device)
 
     corrupt_mask = per_frame_err > threshold
@@ -978,6 +1000,9 @@ def detect_corrupt(
     threshold: float,
     metric: Literal["recon", "quant"] = "recon",
     device: Optional[torch.device] = None,
+    pin_to_origin: bool = False,
+    mean: Optional[Union[torch.Tensor, np.ndarray]] = None,
+    std: Optional[Union[torch.Tensor, np.ndarray]] = None,
 ) -> Tuple[float, bool]:
     """
     单次检测：计算误差并判定是否损坏。
@@ -985,7 +1010,7 @@ def detect_corrupt(
     误差超过 threshold 则判为损坏。阈值需在标定集上根据业务需求确定。
     """
     if metric == "recon":
-        err = compute_reconstruction_error(net, motion, device, reduction="mean")
+        err = compute_reconstruction_error(net, motion, device, reduction="mean", pin_to_origin=pin_to_origin, mean=mean, std=std)
     else:
         err = compute_quantization_error(net, motion, device, reduction="mean")
     err_val = err.item() if isinstance(err, torch.Tensor) else float(err)

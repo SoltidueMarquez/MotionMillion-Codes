@@ -131,6 +131,7 @@ def collect_errors(
     ckpt_path: str,
     metric: str = "recon",
     device: Optional[str] = None,
+    pin_to_origin: bool = False,
     **dataset_kwargs,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -158,6 +159,16 @@ def collect_errors(
     errors_list: List[float] = []
     labels_list: List[int] = []
 
+    # 获取 dataset 实例以取得 mean/std (对于 pin_to_origin 必选)
+    temp_loader, temp_dataset = create_dataloader(
+        motion_dir=motion_dir,
+        file_list_path=good_list_path,
+        batch_size=1,
+        num_workers=0,
+        **dataset_kwargs,
+    )
+    mean, std = temp_dataset.mean, temp_dataset.std
+
     for file_list_path, label in [(good_list_path, 0), (corrupt_list_path, 1)]:
         loader, _ = create_dataloader(
             motion_dir=motion_dir,
@@ -169,7 +180,10 @@ def collect_errors(
         )
         for batch in tqdm(loader, desc=f"采集 {'完好' if label == 0 else '损坏'} 样本误差"):
             motion, _ = batch
-            err = compute_fn(net, motion, reduction="mean")
+            if metric == "recon":
+                err = compute_fn(net, motion, reduction="mean", pin_to_origin=pin_to_origin, mean=mean, std=std)
+            else:
+                err = compute_fn(net, motion, reduction="mean")
             err_val = err.item() if hasattr(err, "item") else float(err)
             errors_list.append(err_val)
             labels_list.append(label)
@@ -184,6 +198,7 @@ def collect_good_only_errors(
     metric: str = "recon",
     frame_level: bool = False,
     device: Optional[str] = None,
+    pin_to_origin: bool = False,
     **dataset_kwargs,
 ) -> Tuple[np.ndarray, float]:
     """
@@ -204,7 +219,7 @@ def collect_good_only_errors(
     if not good_list:
         raise ValueError("good-list 必须提供且文件存在")
 
-    loader, _ = create_dataloader(
+    loader, dataset = create_dataloader(
         motion_dir=motion_dir,
         file_list_path=good_list_path,
         batch_size=1,
@@ -212,6 +227,7 @@ def collect_good_only_errors(
         shuffle=False,
         **dataset_kwargs,
     )
+    mean, std = dataset.mean, dataset.std
 
     all_errors: List[float] = []
     per_sample_max: List[float] = []
@@ -220,7 +236,9 @@ def collect_good_only_errors(
         motion, _ = batch
         if frame_level:
             if metric == "recon":
-                err_tensor = compute_reconstruction_error_per_frame(net, motion)
+                err_tensor = compute_reconstruction_error_per_frame(
+                    net, motion, pin_to_origin=pin_to_origin, mean=mean, std=std
+                )
             else:
                 err_tensor = compute_quantization_error_per_frame(net, motion)
             err_np = err_tensor.cpu().numpy().ravel()
@@ -228,7 +246,9 @@ def collect_good_only_errors(
             per_sample_max.append(float(np.max(err_np)))
         else:
             if metric == "recon":
-                err = compute_reconstruction_error(net, motion, reduction="mean")
+                err = compute_reconstruction_error(
+                    net, motion, reduction="mean", pin_to_origin=pin_to_origin, mean=mean, std=std
+                )
             else:
                 err = compute_quantization_error(net, motion, reduction="mean")
             err_val = err.item() if hasattr(err, "item") else float(err)
@@ -483,6 +503,7 @@ def main() -> None:
             metric=args.metric,
             frame_level=args.frame_level,
             device=args.device,
+            pin_to_origin=args.pin_to_origin,
             **dataset_kwargs,
         )
         n_good = len(per_sample_errors)
@@ -521,6 +542,7 @@ def main() -> None:
             ckpt_path=args.ckpt,
             metric=args.metric,
             device=args.device,
+            pin_to_origin=args.pin_to_origin,
             **dataset_kwargs,
         )
 

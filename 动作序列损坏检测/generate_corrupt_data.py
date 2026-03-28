@@ -48,16 +48,17 @@ HML_LOWER_BODY_JOINTS = [0, 1, 2, 4, 5, 7, 8, 10, 11]  # pelvis, hips, knees, an
 HML_LEFT_LEG_JOINTS = [1, 4, 7, 10]   # left_hip, left_knee, left_ankle, left_foot
 HML_RIGHT_LEG_JOINTS = [2, 5, 8, 11]  # right_hip, right_knee, right_ankle, right_foot
 
-CORRUPT_TYPES = ["jittering", "foot sliding", "over smooth", "drifting"]
-# CORRUPT_TYPES = ["jittering", "over smooth"]
+# CORRUPT_TYPES = ["jittering", "foot sliding", "over smooth", "drifting"]
+CORRUPT_TYPES = ["jittering", "over smooth"]
 
 def _get_joint_indices_for_jittering() -> List[int]:
-    """随机选择要施加 jittering 的关节子集"""
+    """随机选择要施加 jittering 的关节子集 (对齐 StableMotion 逻辑)"""
     choice = np.random.choice(4, p=[0.4, 0.3, 0.15, 0.15])
     if choice == 0:
         n = random.randint(1, NJOINT)
         return random.sample(list(range(NJOINT)), n)
     elif choice == 1:
+        # 参考项目: HML_LOWER_BODY_JOINTS[random.choice((0, 1, 3, 5, 7)):]
         start = random.choice([0, 1, 3, 5, 7])
         return HML_LOWER_BODY_JOINTS[start:]
     elif choice == 2:
@@ -75,37 +76,40 @@ def _apply_jittering(
 ) -> None:
     """对选定区间的关节位置和/或旋转加高斯噪声，可选二次高斯平滑"""
     base_scale = 0.5
-    gaussian_noise_std = 0.1
+    gaussian_noise_std = 0.3  # 提升到 0.3 以应对归一化数据 (原参考值为 0.1)
     rd = np.random.random() * 0.5 + 0.5
     s, e = aug_interval, aug_interval + aug_length
 
     joints_selected = _get_joint_indices_for_jittering()
 
+    # 生成与参考项目完全一致的噪声项
+    noise_term = np.clip(
+        np.random.randn(len(motion), NJOINT, 3).astype(np.float32) * gaussian_noise_std * rd,
+        -base_scale,
+        base_scale,
+    )
+    noise_term_rot = np.clip(
+        np.random.randn(len(motion), NJOINT, 6).astype(np.float32) * gaussian_noise_std * rd,
+        -base_scale,
+        base_scale,
+    )
+
     # 对 positions (8:74) 施加噪声
     for j in joints_selected:
         j_start = 8 + j * 3
         j_end = j_start + 3
-        noise = np.clip(
-            np.random.randn(aug_length, 3).astype(np.float32) * gaussian_noise_std * rd,
-            -base_scale,
-            base_scale,
-        )
-        motion[s:e, j_start:j_end] += noise
+        motion[s:e, j_start:j_end] += noise_term[s:e, j]
 
     # 对 rotations (140:272) 施加噪声
     for j in joints_selected:
         j_start = 140 + j * 6
         j_end = j_start + 6
-        noise = np.clip(
-            np.random.randn(aug_length, 6).astype(np.float32) * gaussian_noise_std * rd,
-            -base_scale,
-            base_scale,
-        )
-        motion[s:e, j_start:j_end] += noise
+        motion[s:e, j_start:j_end] += noise_term_rot[s:e, j]
 
-    # 25% 概率额外做高斯平滑（与 StableMotion 一致，只写回区间 [s,e]）
+    # 25% 概率额外做高斯平滑 (使用 truncate 替代 radius 以兼容旧版本 scipy)
     if np.random.random() < 0.25:
-        truncate = 6 * (np.random.random() * 2 + 2) / 4  # 等价于 radius/sigma，sigma=4
+        radius = float(round(6 * (np.random.random() * 2 + 2)))
+        truncate = radius / 4.0
         for j in joints_selected:
             j_start = 8 + j * 3
             j_end = j_start + 3
@@ -133,27 +137,27 @@ def _apply_over_smooth(
     aug_interval: int,
     aug_length: int,
 ) -> None:
-    """对选定区间的 positions 或 rotations 做高斯平滑"""
-    truncate = 6 * (np.random.random() * 2 + 2) / 4  # 等价于 radius/sigma，sigma=4
+    """对选定区间的 positions 和 rotations 做高斯平滑 (使用 truncate 替代 radius 以兼容旧版本 scipy)"""
+    radius = float(round(6 * (np.random.random() * 2 + 2)))
+    truncate = radius / 4.0
     s, e = aug_interval, aug_interval + aug_length
 
-    # 随机选 positions 或 rotations 或两者
-    if np.random.random() < 0.5:
-        motion[s:e, IDX_POSITIONS] = gaussian_filter1d(
-            motion[:, IDX_POSITIONS],
-            sigma=4,
-            axis=0,
-            truncate=truncate,
-            mode="nearest",
-        )[s:e]
-    else:
-        motion[s:e, IDX_ROTATIONS] = gaussian_filter1d(
-            motion[:, IDX_ROTATIONS],
-            sigma=4,
-            axis=0,
-            truncate=truncate,
-            mode="nearest",
-        )[s:e]
+    # 参考项目 StableMotion 对整个 poses (相当于这里的 rotations) 做平滑
+    # 为了保证 vector_272 内部的一致性，我们对位置和旋转都做平滑
+    motion[s:e, IDX_POSITIONS] = gaussian_filter1d(
+        motion[:, IDX_POSITIONS],
+        sigma=4,
+        axis=0,
+        truncate=truncate,
+        mode="nearest",
+    )[s:e]
+    motion[s:e, IDX_ROTATIONS] = gaussian_filter1d(
+        motion[:, IDX_ROTATIONS],
+        sigma=4,
+        axis=0,
+        truncate=truncate,
+        mode="nearest",
+    )[s:e]
 
 
 def _apply_foot_sliding(
@@ -161,16 +165,17 @@ def _apply_foot_sliding(
     aug_interval: int,
     aug_length: int,
 ) -> None:
-    """对根速度 (0:2) 在区间内施加缩放，模拟脚滑（与 StableMotion disp_matrix 等价）"""
+    """对根速度 (0:2) 在区间内施加缩放，模拟脚滑 (对齐 StableMotion)"""
     scale = 0.1
     s, e = aug_interval, aug_interval + aug_length
     mlen = len(motion)
 
-    root_vel = motion[:, IDX_ROOT_VEL].copy()
+    # 根速度 (0:2) 的缩放
     diag_vec = np.ones((mlen,), dtype=np.float32)
     diag_vec[s:e] += scale * np.random.random((aug_length,)).astype(np.float32)
-    # 等价于 cumsum(root_vel * diag_vec)：修改后的根位移由缩放后的速度累积得到
-    motion[:, IDX_ROOT_VEL] = root_vel * diag_vec[:, None]
+    
+    # 直接修改速度分量
+    motion[:, IDX_ROOT_VEL] *= diag_vec[:, None]
 
 
 def _apply_drifting(
@@ -178,16 +183,17 @@ def _apply_drifting(
     aug_interval: int,
     aug_length: int,
 ) -> None:
-    """在区间内对根速度累加漂移，区间后帧保持末帧漂移"""
+    """在区间内对根速度施加漂移速度 (对齐 StableMotion)"""
     s, e = aug_interval, aug_interval + aug_length
+    # 生成漂移速度方向和量 (参考 StableMotion)
     root_drift_dir = np.random.randn(1, 2).astype(np.float32) + np.random.randn(aug_length, 2).astype(np.float32) * 0.1
     root_drift_vel = np.random.random((aug_length, 1)).astype(np.float32) * 0.025
     root_drift_dir /= np.linalg.norm(root_drift_dir, keepdims=True)
     root_drift_vel = root_drift_vel * root_drift_dir
-    root_drift_dist = np.cumsum(root_drift_vel, axis=0)
-    motion[s:e, IDX_ROOT_VEL] += root_drift_dist
-    if e < len(motion):
-        motion[e:, IDX_ROOT_VEL] += root_drift_dist[-1:]
+    
+    # 修正：在速度空间直接累加漂移速度 root_drift_vel
+    # 在 StableMotion 中是 trans += cumsum(drift_vel)，等价于 vel += drift_vel
+    motion[s:e, IDX_ROOT_VEL] += root_drift_vel
 
 
 def pin_motion_to_origin(motion: np.ndarray) -> np.ndarray:
@@ -242,16 +248,20 @@ def _intervals_to_mask_then_str(
     """
     将 0-based 区间列表合并为 bool mask，再转为 1-based 区间字符串。
     与 detect_corrupt_utils.corrupt_frames_to_intervals 输出格式一致。
+    支持处理重叠区间。
     """
     if not intervals_0based:
         return "[]"
     mask = np.zeros(seq_len, dtype=bool)
     for s, e in intervals_0based:
-        s = max(0, min(s, seq_len - 1))
-        e = max(s, min(e, seq_len - 1))
-        mask[s : e + 1] = True
+        # e 是 inclusive 的 0-based index
+        s_idx = max(0, min(s, seq_len - 1))
+        e_idx = max(s_idx, min(e, seq_len - 1))
+        mask[s_idx : e_idx + 1] = True
+    
     if not mask.any():
         return "[]"
+        
     intervals = []
     in_run = False
     start = 0
@@ -294,9 +304,6 @@ def run_generate(
     input_dir: str,
     output_dir: str,
     file_list_path: Optional[str] = None,
-    num_intervals: Tuple[int, int] = (1, 3),
-    min_interval: int = 5,
-    max_interval: int = 50,
     min_length: int = 64,
     seed: Optional[int] = None,
     recursive: bool = True,
@@ -352,26 +359,28 @@ def run_generate(
         if pin_to_origin:
             motion = pin_motion_to_origin(motion)
 
-        # 随机选择区间数量
-        n_intervals = random.randint(num_intervals[0], min(num_intervals[1], mlen // min_interval))
-        n_intervals = max(1, n_intervals)
-
+        # 1. 先随机选择本次序列要施加的损坏类型列表 (对齐 StableMotion)
+        aug_types_selected = random.sample(current_corrupt_types, random.randint(1, len(current_corrupt_types)))
+        
         motion_corrupt = motion.copy()
         gt_intervals_0based: List[Tuple[int, int]] = []
 
-        for _ in range(n_intervals):
-            aug_length = random.randint(
-                min_interval,
-                min(max_interval, mlen - 2),
-            )
-            aug_interval = random.randint(0, mlen - aug_length)
-            aug_types = random.sample(current_corrupt_types, random.randint(1, len(current_corrupt_types)))
-            for aug_type in aug_types:
-                corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
-            # drifting 与 foot sliding 都会使根位移传播到序列末尾
-            propagates_to_end = "drifting" in aug_types or "foot sliding" in aug_types
-            gt_end = mlen - 1 if propagates_to_end else aug_interval + aug_length - 1
-            gt_intervals_0based.append((aug_interval, gt_end))
+        # 2. 对每种类型独立分配区间
+        for aug_type in aug_types_selected:
+            # 对齐参考项目的 aug_length 生成逻辑 (* 5)
+            # 参考项目: aug_length = min(mlen - 2, int(random.randint(5, min(50, mlen - 2)) * 5))
+            aug_length = min(mlen - 2, int(random.randint(5, min(50, mlen - 2)) * 5))
+            aug_interval = random.randint(1, mlen - aug_length) # 1-based start in StableMotion logic
+            
+            # 施加损坏
+            corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
+            
+            # 记录 GT 区间 (对齐 StableMotion det_mask 逻辑)
+            # StableMotion: det_mask[aug_interval - 1: aug_interval + aug_length + 1] = 1
+            # 注意: 这里统一为 0-based 区间
+            gt_s = max(0, aug_interval - 1)
+            gt_e = min(mlen - 1, aug_interval + aug_length)
+            gt_intervals_0based.append((gt_s, gt_e))
 
         # 计算相对路径
         try:
@@ -464,24 +473,6 @@ def main() -> None:
         help="文件列表 txt，每行一个相对 input-dir 的路径。不提供则扫描 input-dir",
     )
     parser.add_argument(
-        "--num-intervals",
-        type=str,
-        default="1,3",
-        help="每个文件随机损坏区间数量范围，如 '1,3' 表示 1~3 个区间",
-    )
-    parser.add_argument(
-        "--min-interval",
-        type=int,
-        default=5,
-        help="最小区间帧数",
-    )
-    parser.add_argument(
-        "--max-interval",
-        type=int,
-        default=50,
-        help="最大区间帧数",
-    )
-    parser.add_argument(
         "--min-length",
         type=int,
         default=64,
@@ -522,16 +513,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    num_lo, num_hi = map(int, args.num_intervals.split(","))
-    num_intervals = (num_lo, num_hi)
-
     run_generate(
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         file_list_path=args.file_list,
-        num_intervals=num_intervals,
-        min_interval=args.min_interval,
-        max_interval=args.max_interval,
         min_length=args.min_length,
         seed=args.seed,
         recursive=not args.no_recursive,
