@@ -13,17 +13,20 @@ import csv        # 读写 CSV 文件
 import os         # 路径、目录操作
 import sys        # 修改 sys.path 以导入项目模块
 from pathlib import Path
-from typing import Dict, Optional, Tuple  # 可选类型，如 Optional[str] 表示 str 或 None
+from typing import Dict, Literal, Optional, Tuple  # 可选类型，如 Optional[str] 表示 str 或 None
 
 # region 路径配置
-# 获取本脚本所在目录的绝对路径（即 动作序列损坏检测/）
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# 项目根目录 = 动作序列损坏检测 的上一级（即 MotionMillion-Codes/）
-_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-# 将项目根目录和本目录加入 Python 搜索路径，这样 import models、dataset_corrupt_detection 等才能找到
-for _p in (_PROJECT_ROOT, _SCRIPT_DIR):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_FEATURE_ROOT = _SCRIPT_DIR.parent
+_REPO_ROOT = _FEATURE_ROOT.parent
+_DETECT_DIR = _FEATURE_ROOT / "detect"
+_ANALYZE_DIR = _FEATURE_ROOT / "analyze"
+
+# 既要能导入仓库顶层模块，也要兼容 detect/analyze 跨目录平铺导入。
+for _p in (_REPO_ROOT, _FEATURE_ROOT, _DETECT_DIR, _ANALYZE_DIR, _SCRIPT_DIR):
+    _p_str = str(_p)
+    if _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
 # endregion
 
 import torch  # type: ignore[import-untyped]
@@ -39,7 +42,7 @@ from detect_corrupt_utils import (
     load_detector,                # 加载预训练 FSQ-VQ-VAE 模型
     save_detection_visualizations,  # 保存输入与重建动作视频
 )
-from evaluate_detect import load_gt_csv, parse_intervals_to_mask
+from analyze.evaluate_detect import load_gt_csv, parse_intervals_to_mask
 
 
 # region 批量检测逻辑
@@ -141,11 +144,11 @@ def run_batch_detect(
                     )
                     detected_mask = corrupt_mask.cpu().numpy()
                     gt_mask = None
+                    gt_intervals_str = None
                     name_norm = name_stem.replace("\\", "/")
                     if name_norm in gt_dict:
-                        gt_intervals, _ = gt_dict[name_norm]
-                        T = m.shape[1]
-                        gt_mask = parse_intervals_to_mask(gt_intervals, T)
+                        gt_intervals_str, T = gt_dict[name_norm]
+                        gt_mask = parse_intervals_to_mask(gt_intervals_str, T)
                     
                     # 各部位误差（用于叠加模式）
                     err_parts_np = None
@@ -163,6 +166,7 @@ def run_batch_detect(
                         overlay=overlay,
                         per_part_errors=err_parts_np,
                         pin_to_origin=pin_to_origin,
+                        gt_intervals_str=gt_intervals_str,
                     )
                 sample_idx += 1
 

@@ -20,10 +20,14 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 # region 路径配置
-# 确保项目根目录在 path 中
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+_DETECT_DIR = Path(__file__).resolve().parent
+_FEATURE_ROOT = _DETECT_DIR.parent
+_REPO_ROOT = _FEATURE_ROOT.parent
+
+for _p in (_REPO_ROOT, _FEATURE_ROOT, _DETECT_DIR):
+    _p_str = str(_p)
+    if _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
 # endregion
 
 
@@ -63,7 +67,7 @@ class CorruptDetectionDataset(Dataset):
 
         # 加载 mean/std
         if mean_std_dir is None:
-            data_root = Path(_PROJECT_ROOT) / "dataset" / "MotionMillion"
+            data_root = _REPO_ROOT / "dataset" / "MotionMillion"
             mean_std_dir = data_root / "mean_std" / motion_type
         self.mean_std_dir = Path(mean_std_dir)
         self.mean = np.load(self.mean_std_dir / "mean.npy")

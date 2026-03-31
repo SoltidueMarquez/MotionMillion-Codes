@@ -18,12 +18,16 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# 确保项目根目录在 path 中，以便导入 detect_corrupt_utils
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-for _p in (_PROJECT_ROOT, _SCRIPT_DIR):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# 确保既能导入仓库顶层模块，也能导入 detect 子目录下的辅助脚本。
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_FEATURE_ROOT = _SCRIPT_DIR.parent
+_REPO_ROOT = _FEATURE_ROOT.parent
+_DETECT_DIR = _FEATURE_ROOT / "detect"
+
+for _p in (_REPO_ROOT, _FEATURE_ROOT, _DETECT_DIR, _SCRIPT_DIR):
+    _p_str = str(_p)
+    if _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
 
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
@@ -49,7 +53,7 @@ HML_LEFT_LEG_JOINTS = [1, 4, 7, 10]   # left_hip, left_knee, left_ankle, left_fo
 HML_RIGHT_LEG_JOINTS = [2, 5, 8, 11]  # right_hip, right_knee, right_ankle, right_foot
 
 # CORRUPT_TYPES = ["jittering", "foot sliding", "over smooth", "drifting"]
-CORRUPT_TYPES = ["over smooth"]
+CORRUPT_TYPES = ["foot sliding"]
 
 def _get_joint_indices_for_jittering() -> List[int]:
     """随机选择要施加 jittering 的关节子集 (对齐 StableMotion 逻辑)"""
@@ -241,6 +245,21 @@ def corrupt_motion_vector272(
         raise NotImplementedError(f"Unknown aug_type: {aug_type}")
 
 
+def _intervals_with_types_to_str(
+    intervals_0based: List[Tuple[int, int, str]],
+) -> str:
+    """
+    将带类型的 0-based 区间列表转为 1-based 区间字符串，格式为 [s,e,type]。
+    不进行合并，以便保留原始损坏类型信息。
+    """
+    if not intervals_0based:
+        return "[]"
+    res = []
+    for s, e, t in intervals_0based:
+        res.append(f"[{s+1},{e+1},{t}]")
+    return ",".join(res)
+
+
 def _intervals_to_mask_then_str(
     intervals_0based: List[Tuple[int, int]],
     seq_len: int,
@@ -363,7 +382,7 @@ def run_generate(
         aug_types_selected = random.sample(current_corrupt_types, random.randint(1, len(current_corrupt_types)))
         
         motion_corrupt = motion.copy()
-        gt_intervals_0based: List[Tuple[int, int]] = []
+        gt_intervals_with_types: List[Tuple[int, int, str]] = []
 
         # 2. 对每种类型独立分配区间
         for aug_type in aug_types_selected:
@@ -380,7 +399,7 @@ def run_generate(
             # 注意: 这里统一为 0-based 区间
             gt_s = max(0, aug_interval - 1)
             gt_e = min(mlen - 1, aug_interval + aug_length)
-            gt_intervals_0based.append((gt_s, gt_e))
+            gt_intervals_with_types.append((gt_s, gt_e, aug_type))
 
         # 计算相对路径
         try:
@@ -411,13 +430,13 @@ def run_generate(
         corrupt_entries.append(corrupt_entry)
 
         # 记录 GT 损坏区间，供 evaluate_detect 对比
-        gt_intervals_str = _intervals_to_mask_then_str(gt_intervals_0based, mlen)
+        gt_intervals_str = _intervals_with_types_to_str(gt_intervals_with_types)
         gt_entries.append((corrupt_entry, gt_intervals_str, mlen))
 
         # 可视化：保存原始与损坏动作视频到 output_dir/vis/{rel_stem}/
         if visualize:
             try:
-                from detect_corrupt_utils import visualize_motion_vector272
+                from detect.detect_corrupt_utils import visualize_motion_vector272
                 vis_folder = output_path / "vis" / rel.with_suffix("")
                 vis_folder.mkdir(parents=True, exist_ok=True)
                 visualize_motion_vector272(motion, str(vis_folder / "input.mp4"), fps=vis_fps)

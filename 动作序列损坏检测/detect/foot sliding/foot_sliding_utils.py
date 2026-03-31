@@ -153,3 +153,93 @@ def compute_foot_sliding_mask(
     return mask_L, mask_R, score
 
 
+def compute_foot_sliding_mask_stable_motion(
+    joints: np.ndarray,
+    thresh_height: float = 0.10,
+    thresh_vel: float = 0.10,
+    fps: int = 20,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    基于 StableMotion 项目中的逻辑实现的脚滑检测 (模式2)。
+    保持与 StableMotion/data_loaders/dataset_utils.py:foot_slidedetect_zup 逻辑一致。
+
+    Args:
+        joints: (T, 22, 3) 的关节坐标，y 轴为高度 (本项目 convention)。
+        thresh_height: 高度阈值 (米)。
+        thresh_vel: 水平速度阈值 (米/秒)。
+        fps: 帧率。
+
+    Returns:
+        mask_L: (T,) bool，左脚是否满足滑动条件。
+        mask_R: (T,) bool，右脚是否满足滑动条件。
+        score: (T,) float，整体评分 (左右脚水平速度的最大值)。
+    """
+    joints = np.asarray(joints, dtype=np.float32)
+    # StableMotion 使用索引: 7, 10 (左), 8, 11 (右)
+    foot_joint_index_list = [7, 10, 8, 11]
+    joints_foot = joints[:, foot_joint_index_list, :]  # (T, 4, 3)
+
+    # 适配 Y-up 坐标系: y 是高度, (x, z) 是水平面
+    # StableMotion 是 Z-up: z 是高度, (x, y) 是水平面
+    h_idx = 1
+    horiz_idx = [0, 2]
+
+    # offseth: 所有帧所有关节的最小高度
+    offseth = joints[:, :, h_idx].min()
+
+    # 水平速度 (m/s)
+    # v[i] = (p[i+1] - p[i]) * fps
+    joints_feet_horizon_vel = (
+        np.linalg.norm(
+            joints_foot[1:, :, horiz_idx] - joints_foot[:-1, :, horiz_idx], axis=-1
+        )
+        * fps
+    )  # (T-1, 4)
+
+    # 相对高度
+    joints_feet_height = joints_foot[:-1, :, h_idx] - offseth  # (T-1, 4)
+
+    # StableMotion 逻辑:
+    # skating_left: 踝部(0)和足部(1)同时满足速度和高度阈值
+    # 注意: 踝部高度阈值多 0.05m
+    skating_left = (
+        (joints_feet_horizon_vel[:, 0] > thresh_vel)
+        & (joints_feet_horizon_vel[:, 1] > thresh_vel)
+        & (joints_feet_height[:, 0] < (thresh_height + 0.05))
+        & (joints_feet_height[:, 1] < thresh_height)
+    )
+
+    skating_right = (
+        (joints_feet_horizon_vel[:, 2] > thresh_vel)
+        & (joints_feet_horizon_vel[:, 3] > thresh_vel)
+        & (joints_feet_height[:, 2] < (thresh_height + 0.05))
+        & (joints_feet_height[:, 3] < thresh_height)
+    )
+
+    # StableMotion 原代码返回的是 torch.logical_and(skating_left, skating_right)
+    # 意味着必须双脚同时滑动。为了对齐并输出 mask_L/R，我们记录各自的状态。
+    # 并在最终结果中使用 logical_and (如果需要完全一致的话)。
+    # 但通常我们希望知道哪只脚滑了。根据用户要求 "保持检测逻辑完全一致"。
+    
+    # 这里的 mask 是 T-1 长度，我们需要 padding 到 T
+    mask_L = np.concatenate([skating_left, skating_left[-1:]])
+    mask_R = np.concatenate([skating_right, skating_right[-1:]])
+    
+    # 计算 score (用于排序/分析)
+    v_L_h = np.linalg.norm(
+        (joints_foot[1:, 0, horiz_idx] + joints_foot[1:, 1, horiz_idx]) * 0.5 -
+        (joints_foot[:-1, 0, horiz_idx] + joints_foot[:-1, 1, horiz_idx]) * 0.5,
+        axis=-1
+    ) * fps
+    v_R_h = np.linalg.norm(
+        (joints_foot[1:, 2, horiz_idx] + joints_foot[1:, 3, horiz_idx]) * 0.5 -
+        (joints_foot[:-1, 2, horiz_idx] + joints_foot[:-1, 3, horiz_idx]) * 0.5,
+        axis=-1
+    ) * fps
+    v_L_h = np.concatenate([v_L_h, v_L_h[-1:]])
+    v_R_h = np.concatenate([v_R_h, v_R_h[-1:]])
+    score = np.maximum(v_L_h, v_R_h)
+
+    return mask_L, mask_R, score
+
+

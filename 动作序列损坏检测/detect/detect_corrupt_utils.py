@@ -13,17 +13,22 @@ from __future__ import annotations
 import os
 import sys
 from argparse import Namespace
+from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
 # region 路径与导入配置
-# 本脚本位于 动作序列损坏检测/ 子目录，需将项目根目录加入 sys.path，
-# 才能正确导入 models.vqvae、options 等上层模块
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+_DETECT_DIR = Path(__file__).resolve().parent
+_FEATURE_ROOT = _DETECT_DIR.parent
+_REPO_ROOT = _FEATURE_ROOT.parent
+
+# 仓库根用于导入 models/utils/visualize，detect 目录用于兼容平铺模块引用。
+for _p in (_REPO_ROOT, _FEATURE_ROOT, _DETECT_DIR):
+    _p_str = str(_p)
+    if _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
 
 from einops import rearrange
 from einops import pack as einops_pack
@@ -634,6 +639,7 @@ def visualize_motion_overlay_vector272(
     title: str = "Original (Blue) vs Reconstructed (Red)",
     gt_corrupt_mask: Optional[np.ndarray] = None,
     detected_corrupt_mask: Optional[np.ndarray] = None,
+    gt_intervals_str: Optional[str] = None,
 ) -> bool:
     """
     将原始动作与重建动作重叠可视化。
@@ -777,7 +783,7 @@ def visualize_motion_overlay_vector272(
         
         # 叠加 GT/Det 标注 (frames 是列表，转成 numpy 数组处理)
         frames_np = np.array(frames, dtype=np.uint8)
-        frames_np = _draw_annotation_overlay(frames_np, gt_corrupt_mask, detected_corrupt_mask)
+        frames_np = _draw_annotation_overlay(frames_np, gt_corrupt_mask, detected_corrupt_mask, gt_intervals_str=gt_intervals_str)
         
         out_dir = os.path.dirname(output_path)
         if out_dir: os.makedirs(out_dir, exist_ok=True)
@@ -795,10 +801,12 @@ def _draw_annotation_overlay(
     frames: np.ndarray,
     gt_corrupt_mask: Optional[np.ndarray],
     detected_corrupt_mask: Optional[np.ndarray],
+    gt_intervals_str: Optional[str] = None,
 ) -> np.ndarray:
     """
     在每帧左上角叠加 GT/Det 标注文本。
     frames: (T, H, W, C), C 为 3 或 4
+    gt_intervals_str: 带类型的 GT 区间字符串，用于显示具体的损坏类型
     """
     if gt_corrupt_mask is None and detected_corrupt_mask is None:
         return frames
@@ -810,6 +818,18 @@ def _draw_annotation_overlay(
     T = frames.shape[0]
     out = np.array(frames, dtype=np.uint8, copy=True)
     has_alpha = out.shape[-1] == 4
+
+    # 预解析 GT 区间以获得每帧的类型信息
+    frame_types: List[set] = [set() for _ in range(T)]
+    if gt_intervals_str and gt_intervals_str != "[]":
+        import re
+        pattern = r"\[(\d+),(\d+)(?:,([^\]]+))?\]"
+        for m in re.finditer(pattern, gt_intervals_str):
+            s, e = int(m.group(1)), int(m.group(2))
+            t = m.group(3) if m.group(3) else "corrupt"
+            for i in range(max(0, s-1), min(T, e)):
+                frame_types[i].add(t)
+
     for i in range(T):
         frame = out[i]
         rgb = frame[..., :3] if has_alpha else frame
@@ -817,14 +837,21 @@ def _draw_annotation_overlay(
 
         parts = [f"Frame {i}"]
         if gt_corrupt_mask is not None and i < len(gt_corrupt_mask):
-            parts.append(f"GT: {'corrupt' if gt_corrupt_mask[i] else 'OK'}")
+            if gt_corrupt_mask[i]:
+                types = frame_types[i]
+                type_str = ",".join(sorted(list(types))) if types else "corrupt"
+                parts.append(f"GT: {type_str}")
+            else:
+                parts.append("GT: OK")
+        
         if detected_corrupt_mask is not None and i < len(detected_corrupt_mask):
             parts.append(f"Det: {'corrupt' if detected_corrupt_mask[i] else 'OK'}")
+        
         text = " | ".join(parts)
 
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.rectangle(frame_bgr, (5, 5), (15 + tw, 15 + th), (40, 40, 40), -1)
-        cv2.putText(frame_bgr, text, (10, 10 + th), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(frame_bgr, text, (10, 10 + th), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
         rgb_out = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         if has_alpha:
@@ -840,6 +867,7 @@ def visualize_motion_vector272(
     fps: int = 30,
     gt_corrupt_mask: Optional[np.ndarray] = None,
     detected_corrupt_mask: Optional[np.ndarray] = None,
+    gt_intervals_str: Optional[str] = None,
 ) -> bool:
     """
     将已反标准化的 vector_272 动作序列可视化为视频并保存。
@@ -853,6 +881,7 @@ def visualize_motion_vector272(
         fps: 视频帧率
         gt_corrupt_mask: 可选，(T,) bool，GT 标注的损坏帧
         detected_corrupt_mask: 可选，(T,) bool，检测判定的损坏帧
+        gt_intervals_str: 带类型的 GT 区间字符串，用于显示具体的损坏类型
 
     Returns:
         True 若成功，False 若失败（不抛出异常）
@@ -901,7 +930,7 @@ def visualize_motion_vector272(
 
         img = plot_3d_motion([xyz, None, None])
         frames = np.array(img, dtype=np.uint8)
-        frames = _draw_annotation_overlay(frames, gt_corrupt_mask, detected_corrupt_mask)
+        frames = _draw_annotation_overlay(frames, gt_corrupt_mask, detected_corrupt_mask, gt_intervals_str=gt_intervals_str)
         imageio.mimsave(output_path, frames, fps=fps)
         return True
     except Exception as e:
@@ -923,6 +952,7 @@ def save_detection_visualizations(
     overlay: bool = False,
     per_part_errors: Optional[np.ndarray] = None,
     pin_to_origin: bool = False,
+    gt_intervals_str: Optional[str] = None,
 ) -> bool:
     """
     保存检测时的输入与重建动作视频。
@@ -946,6 +976,7 @@ def save_detection_visualizations(
         overlay: 是否采用重叠可视化模式
         per_part_errors: (T, 7) 各部位每帧误差，overlay=True 时使用
         pin_to_origin: 是否在可视化前将动作钉在原地
+        gt_intervals_str: 可选，带类型的 GT 区间字符串
     """
     try:
         # 在反标准化前（或反标准化后均可，pin_motion_to_origin 支持两种）执行 pinning
@@ -974,16 +1005,19 @@ def save_detection_visualizations(
                 per_frame_errors=per_part_errors, fps=fps,
                 gt_corrupt_mask=gt_corrupt_mask,
                 detected_corrupt_mask=detected_corrupt_mask,
+                gt_intervals_str=gt_intervals_str,
             )
         else:
             # 默认模式：输出两个独立视频
             ok1 = visualize_motion_vector272(
                 motion_denorm, os.path.join(folder, "input.mp4"), fps=fps,
                 gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
+                gt_intervals_str=gt_intervals_str,
             )
             ok2 = visualize_motion_vector272(
                 rec_denorm, os.path.join(folder, "reconstructed.mp4"), fps=fps,
                 gt_corrupt_mask=gt_corrupt_mask, detected_corrupt_mask=detected_corrupt_mask,
+                gt_intervals_str=gt_intervals_str,
             )
             return ok1 or ok2
     except Exception as e:

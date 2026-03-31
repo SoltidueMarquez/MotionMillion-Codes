@@ -20,11 +20,14 @@ from typing import Callable, List, Optional, cast
 import numpy as np
 import torch
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-for _p in (_PROJECT_ROOT, _SCRIPT_DIR):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_FEATURE_ROOT = _SCRIPT_DIR.parent
+_REPO_ROOT = _FEATURE_ROOT.parent
+
+for _p in (_REPO_ROOT, _FEATURE_ROOT, _SCRIPT_DIR):
+    _p_str = str(_p)
+    if _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
 
 from tqdm import tqdm
 

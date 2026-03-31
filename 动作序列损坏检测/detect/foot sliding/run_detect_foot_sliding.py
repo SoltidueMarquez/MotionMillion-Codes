@@ -10,15 +10,34 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from tqdm import tqdm
 
+# region 路径配置
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_DETECT_DIR = _SCRIPT_DIR.parent
+_FEATURE_ROOT = _DETECT_DIR.parent
+_REPO_ROOT = _FEATURE_ROOT.parent
+_ANALYZE_DIR = _FEATURE_ROOT / "analyze"
+
+for _p in (_REPO_ROOT, _FEATURE_ROOT, _DETECT_DIR, _ANALYZE_DIR, _SCRIPT_DIR):
+    _p_str = str(_p)
+    if _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
+# endregion
+
 from dataset_corrupt_detection import create_dataloader
 from detect_corrupt_utils import corrupt_frames_to_intervals
 from evaluate_detect import load_gt_csv, parse_intervals_to_mask
-from foot_sliding_utils import denorm_and_to_joints, compute_foot_sliding_mask
+from foot_sliding_utils import (
+    denorm_and_to_joints,
+    compute_foot_sliding_mask,
+    compute_foot_sliding_mask_stable_motion,
+)
 from detect_corrupt_utils import visualize_motion_vector272
 
 
@@ -38,14 +57,15 @@ def run_batch_detect_foot_sliding(
     foot_ground_height_thresh: float = 0.03,
     foot_vert_vel_thresh: float = 0.03,
     foot_horiz_vel_k: float = 3.0,
+    mode: str = "original",
+    fps: int = 30,
 ) -> None:
     """
     批量脚滑检测：逐条读取 motion，转换到关节空间，生成脚滑帧区间并写入 CSV。
 
-    输出 CSV 列结构：
-        name, corrupt_intervals, mean_sliding_score
-    其中 corrupt_intervals 与 evaluate_detect.py 兼容。
-    若 visualize_num > 0，则对前 N 个样本输出带 GT/Det 脚滑标注的视频。
+    Args:
+        mode: "original" 或 "stable_motion"。
+        fps: 帧率，用于速度计算。
     """
     loader, dataset = create_dataloader(
         motion_dir=motion_dir,
@@ -95,13 +115,24 @@ def run_batch_detect_foot_sliding(
                     std=dataset.std,
                 )
 
-                mask_L, mask_R, score = compute_foot_sliding_mask(
-                    joints,
-                    foot_ground_height_thresh=foot_ground_height_thresh,
-                    foot_vert_vel_thresh=foot_vert_vel_thresh,
-                    foot_horiz_vel_k=foot_horiz_vel_k,
-                )
-                corrupt_mask = mask_L | mask_R
+                if mode == "stable_motion":
+                    mask_L, mask_R, score = compute_foot_sliding_mask_stable_motion(
+                        joints,
+                        thresh_height=foot_ground_height_thresh,
+                        thresh_vel=foot_vert_vel_thresh,
+                        fps=fps,
+                    )
+                    # StableMotion 的核心逻辑是必须两只脚同时滑动
+                    corrupt_mask = mask_L & mask_R
+                else:
+                    mask_L, mask_R, score = compute_foot_sliding_mask(
+                        joints,
+                        foot_ground_height_thresh=foot_ground_height_thresh,
+                        foot_vert_vel_thresh=foot_vert_vel_thresh,
+                        foot_horiz_vel_k=foot_horiz_vel_k,
+                    )
+                    corrupt_mask = mask_L | mask_R
+
                 intervals_str = corrupt_frames_to_intervals(corrupt_mask)
                 mean_score = float(score.mean()) if score.size > 0 else 0.0
 
@@ -198,6 +229,19 @@ def main() -> None:
 
     # 脚滑检测特有参数
     parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["original", "stable_motion"],
+        default="original",
+        help="检测模式：'original' 为项目原始逻辑, 'stable_motion' 为 StableMotion 逻辑",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=20,
+        help="运动帧率 (影响速度计算, 仅对 stable_motion 模式生效)。StableMotion 默认为 20",
+    )
+    parser.add_argument(
         "--foot-ground-height-thresh",
         type=float,
         default=0.03,
@@ -256,6 +300,8 @@ def main() -> None:
         unit_length=args.unit_length,
         min_length=args.min_length,
         recursive=not args.no_recursive,
+        mode=args.mode,
+        fps=args.fps,
         foot_ground_height_thresh=args.foot_ground_height_thresh,
         foot_vert_vel_thresh=args.foot_vert_vel_thresh,
         foot_horiz_vel_k=args.foot_horiz_vel_k,
