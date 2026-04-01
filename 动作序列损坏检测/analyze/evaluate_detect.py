@@ -78,14 +78,14 @@ def load_gt_csv(path: str) -> Dict[str, Tuple[str, int]]:
     return result
 
 
-def load_detect_csv(path: str) -> Dict[str, str]:
+def load_detect_csv(path: str, col_name: str = "corrupt_intervals") -> Dict[str, str]:
     """加载检测 CSV（run_detect --frame-level 输出），返回 {name: corrupt_intervals}"""
     result = {}
     with open(path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             name = _normalize_name(row.get("name", "").strip())
-            corrupt_intervals = row.get("corrupt_intervals", "").strip()
+            corrupt_intervals = row.get(col_name, "").strip()
             if name:
                 result[name] = corrupt_intervals
     return result
@@ -95,13 +95,14 @@ def evaluate(
     gt_csv_path: str,
     detect_csv_path: str,
     output_path: Optional[str] = None,
+    col_name: str = "corrupt_intervals",
 ) -> Tuple[int, int, int, int, float, float, float]:
     """
     对比 GT 与检测结果，计算帧级 TP/FP/FN/TN 及 Precision、Recall、IoU。
     支持按损坏类型进行细分统计。
     """
     gt_data = load_gt_csv(gt_csv_path)
-    detect_data = load_detect_csv(detect_csv_path)
+    detect_data = load_detect_csv(detect_csv_path, col_name=col_name)
 
     common_names = set(gt_data.keys()) & set(detect_data.keys())
     if not common_names:
@@ -199,6 +200,12 @@ def main() -> None:
         default=None,
         help="可选，汇总指标输出文件路径",
     )
+    parser.add_argument(
+        "--col-name",
+        type=str,
+        default="corrupt_intervals",
+        help="检测 CSV 中包含损坏区间的列名，默认为 corrupt_intervals",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.gt_csv):
@@ -212,6 +219,7 @@ def main() -> None:
         gt_csv_path=args.gt_csv,
         detect_csv_path=args.detect_csv,
         output_path=args.output,
+        col_name=args.col_name,
     )
 
 

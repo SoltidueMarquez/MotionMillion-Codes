@@ -32,7 +32,7 @@ for _p in (_REPO_ROOT, _FEATURE_ROOT, _DETECT_DIR, _ANALYZE_DIR, _SCRIPT_DIR):
 
 from dataset_corrupt_detection import create_dataloader
 from detect_corrupt_utils import corrupt_frames_to_intervals
-from evaluate_detect import load_gt_csv, parse_intervals_to_mask
+from evaluate_detect import evaluate, load_gt_csv, parse_intervals_to_mask
 from foot_sliding_utils import (
     denorm_and_to_joints,
     compute_foot_sliding_mask,
@@ -136,9 +136,7 @@ def run_batch_detect_foot_sliding(
                 intervals_str = corrupt_frames_to_intervals(corrupt_mask)
                 mean_score = float(score.mean()) if score.size > 0 else 0.0
 
-                writer.writerow(
-                    [name_stem, intervals_str, f"{mean_score:.6f}"]
-                )
+                writer.writerow([name_stem, intervals_str, f"{mean_score:.6f}"])
 
                 # 可视化：仅对前 visualize_num 个样本生成视频
                 if visualize_num > 0 and sample_idx < visualize_num:
@@ -161,7 +159,7 @@ def run_batch_detect_foot_sliding(
                         vis_output_dir, name_stem.replace("\\", "/")
                     )
                     os.makedirs(folder, exist_ok=True)
-                    out_path = os.path.join(folder, "footsliding.mp4")
+                    out_path = os.path.join(folder, f"footsliding_{mode}.mp4")
 
                     # 复用现有 vector_272 可视化工具，并叠加 GT / 脚滑检测结果
                     visualize_motion_vector272(
@@ -259,6 +257,7 @@ def main() -> None:
         default=3.0,
         help="水平速度自适应阈值的倍数系数（Median + k * MAD）",
     )
+
     # 可视化相关参数
     parser.add_argument(
         "--output",
@@ -283,6 +282,11 @@ def main() -> None:
         type=str,
         default=None,
         help="ground_truth_intervals.csv 路径，提供则在视频中叠加 GT 标注",
+    )
+    parser.add_argument(
+        "--auto-evaluate",
+        action="store_true",
+        help="检测完成后是否根据 --gt-csv 自动进行准确性评估",
     )
 
     args = parser.parse_args()
@@ -311,6 +315,35 @@ def main() -> None:
         gt_csv_path=args.gt_csv,
     )
     print(f"脚滑检测完成，结果已保存到 {args.output_csv}")
+
+    # 自动评估逻辑
+    if args.auto_evaluate:
+        if args.gt_csv and os.path.exists(args.gt_csv):
+            # 推导评估输出路径
+            out_dir = os.path.dirname(args.output_csv) or "."
+            out_name = os.path.basename(args.output_csv)
+            
+            # 命名对齐规则：
+            # detect_results_corrupt_footsliding_org.csv -> 脚滑检测准确性_org.txt
+            # detect_results_corrupt_footsliding_sm.csv -> 脚滑检测准确性_sm.txt
+            if "_org.csv" in out_name:
+                eval_name = "脚滑检测准确性_org.txt"
+            elif "_sm.csv" in out_name:
+                eval_name = "脚滑检测准确性_sm.txt"
+            else:
+                eval_name = "脚滑检测准确性.txt"
+                
+            eval_output = os.path.join(out_dir, eval_name)
+            
+            print(f"\n>>> 正在自动进行准确性评估...")
+            evaluate(
+                gt_csv_path=args.gt_csv,
+                detect_csv_path=args.output_csv,
+                output_path=eval_output,
+                col_name="corrupt_intervals"
+            )
+        else:
+            print(f"\n[警告] 未提供有效 --gt-csv，跳过自动评估。")
 
 
 if __name__ == "__main__":
