@@ -83,7 +83,7 @@ def compute_foot_sliding_mask(
     foot_ground_height_thresh: float = 0.03,
     foot_vert_vel_thresh: float = 0.03,
     foot_horiz_vel_k: float = 3.0,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
     """
     基于关节轨迹计算左右脚逐帧脚滑掩码。
 
@@ -150,7 +150,17 @@ def compute_foot_sliding_mask(
     mask_R = support_R & (v_R_h > thr_R)
 
     score = np.maximum(v_L_h, v_R_h)
-    return mask_L, mask_R, score
+    
+    debug_info = {
+        "v_L_h": v_L_h,
+        "v_R_h": v_R_h,
+        "thr_L": thr_L,
+        "thr_R": thr_R,
+        "support_L": support_L,
+        "support_R": support_R
+    }
+    
+    return mask_L, mask_R, score, debug_info
 
 
 def compute_foot_sliding_mask_stable_motion(
@@ -158,7 +168,7 @@ def compute_foot_sliding_mask_stable_motion(
     thresh_height: float = 0.10,
     thresh_vel: float = 0.10,
     fps: int = 20,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
     """
     基于 StableMotion 项目中的逻辑实现的脚滑检测 (模式2)。
     保持与 StableMotion/data_loaders/dataset_utils.py:foot_slidedetect_zup 逻辑一致。
@@ -173,6 +183,7 @@ def compute_foot_sliding_mask_stable_motion(
         mask_L: (T,) bool，左脚是否满足滑动条件。
         mask_R: (T,) bool，右脚是否满足滑动条件。
         score: (T,) float，整体评分 (左右脚水平速度的最大值)。
+        debug_info: 包含阈值和速度。
     """
     joints = np.asarray(joints, dtype=np.float32)
     # StableMotion 使用索引: 7, 10 (左), 8, 11 (右)
@@ -240,6 +251,14 @@ def compute_foot_sliding_mask_stable_motion(
     v_R_h = np.concatenate([v_R_h, v_R_h[-1:]])
     score = np.maximum(v_L_h, v_R_h)
 
-    return mask_L, mask_R, score
+    debug_info = {
+        "v_L_h": v_L_h,
+        "v_R_h": v_R_h,
+        "thr_vel": thresh_vel,
+        "height_L": joints_feet_height[:, 0], # padding later if needed
+        "height_R": joints_feet_height[:, 2]
+    }
+
+    return mask_L, mask_R, score, debug_info
 
 

@@ -168,7 +168,7 @@ def _apply_foot_sliding(
     motion: np.ndarray,
     aug_interval: int,
     aug_length: int,
-) -> None:
+) -> Tuple[np.ndarray, np.ndarray]:
     """对根速度 (0:2) 在区间内施加缩放，模拟脚滑 (对齐 StableMotion)"""
     scale = 0.1
     s, e = aug_interval, aug_interval + aug_length
@@ -178,8 +178,18 @@ def _apply_foot_sliding(
     diag_vec = np.ones((mlen,), dtype=np.float32)
     diag_vec[s:e] += scale * np.random.random((aug_length,)).astype(np.float32)
     
+    # 记录原始速度模长
+    old_vel = motion[s:e, IDX_ROOT_VEL]
+    old_vel_norms = np.linalg.norm(old_vel, axis=1)
+
     # 直接修改速度分量
     motion[:, IDX_ROOT_VEL] *= diag_vec[:, None]
+    
+    # 记录修改后速度模长
+    new_vel = motion[s:e, IDX_ROOT_VEL]
+    new_vel_norms = np.linalg.norm(new_vel, axis=1)
+
+    return old_vel_norms, new_vel_norms
 
 
 def _apply_drifting(
@@ -231,18 +241,19 @@ def corrupt_motion_vector272(
     aug_interval: int,
     aug_length: int,
     aug_type: str,
-) -> None:
-    """对 motion 的指定区间施加指定类型损坏，原地修改"""
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """对 motion 的指定区间施加指定类型损坏，原地修改。若为 footsliding，返回原始和损坏后速度。"""
     if aug_type == "jittering":
         _apply_jittering(motion, aug_interval, aug_length)
     elif aug_type == "over smooth":
         _apply_over_smooth(motion, aug_interval, aug_length)
     elif aug_type == "foot sliding":
-        _apply_foot_sliding(motion, aug_interval, aug_length)
+        return _apply_foot_sliding(motion, aug_interval, aug_length)
     elif aug_type == "drifting":
         _apply_drifting(motion, aug_interval, aug_length)
     else:
         raise NotImplementedError(f"Unknown aug_type: {aug_type}")
+    return None
 
 
 def _intervals_with_types_to_str(
@@ -358,6 +369,7 @@ def run_generate(
     corrupt_entries: List[str] = []
     good_entries: List[str] = []
     gt_entries: List[Tuple[str, str, int]] = []  # (name, gt_intervals, seq_len)
+    footsliding_vel_records: List[Tuple[str, int, float, float]] = [] # (name, frame_idx, old_v, new_v)
 
     for fp in tqdm(files, desc="生成损坏数据"):
         try:
@@ -391,8 +403,13 @@ def run_generate(
             aug_length = min(mlen - 2, int(random.randint(5, min(50, mlen - 2)) * 5))
             aug_interval = random.randint(1, mlen - aug_length) # 1-based start in StableMotion logic
             
-            # 施加损坏
-            corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
+            # 施加损坏并收集速度统计 (仅 footsliding)
+            res = corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
+            if aug_type == "foot sliding" and res is not None:
+                old_v_norms, new_v_norms = res
+                stem = fp.stem
+                for i_offset, (ov, nv) in enumerate(zip(old_v_norms, new_v_norms)):
+                    footsliding_vel_records.append((stem, aug_interval + i_offset, float(ov), float(nv)))
             
             # 记录 GT 区间 (对齐 StableMotion det_mask 逻辑)
             # StableMotion: det_mask[aug_interval - 1: aug_interval + aug_length + 1] = 1
@@ -462,6 +479,16 @@ def run_generate(
         writer.writerow(["name", "gt_intervals", "seq_len"])
         for name, gt_intervals, seq_len in gt_entries:
             writer.writerow([name, gt_intervals, seq_len])
+
+    # 写入 footsliding_vel_stats.csv，用于验证召回率猜想
+    if footsliding_vel_records:
+        stats_csv_path = output_path / "footsliding_vel_stats.csv"
+        with open(stats_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["name", "frame_idx", "old_v", "new_v"])
+            for rec in footsliding_vel_records:
+                writer.writerow(rec)
+        print(f"  footsliding_vel_stats.csv -> {stats_csv_path}")
 
     print(f"完成: 生成 {len(good_entries)} 个完好副本、{len(corrupt_entries)} 个损坏文件")
     print(f"  good_list.txt -> {good_list_path}")

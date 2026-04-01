@@ -95,6 +95,9 @@ def run_batch_detect_foot_sliding(
         writer = csv.writer(f)
         writer.writerow(["name", "corrupt_intervals", "mean_sliding_score"])
 
+        # 用于分析召回率的 FN 记录
+        fn_records = []
+
         sample_idx = 0
         for batch in tqdm(loader, desc="脚滑检测中"):
             motion, names = batch  # motion: (B, T, 272)
@@ -116,7 +119,7 @@ def run_batch_detect_foot_sliding(
                 )
 
                 if mode == "stable_motion":
-                    mask_L, mask_R, score = compute_foot_sliding_mask_stable_motion(
+                    mask_L, mask_R, score, debug = compute_foot_sliding_mask_stable_motion(
                         joints,
                         thresh_height=foot_ground_height_thresh,
                         thresh_vel=foot_vert_vel_thresh,
@@ -125,13 +128,43 @@ def run_batch_detect_foot_sliding(
                     # StableMotion 的核心逻辑是必须两只脚同时滑动
                     corrupt_mask = mask_L & mask_R
                 else:
-                    mask_L, mask_R, score = compute_foot_sliding_mask(
+                    mask_L, mask_R, score, debug = compute_foot_sliding_mask(
                         joints,
                         foot_ground_height_thresh=foot_ground_height_thresh,
                         foot_vert_vel_thresh=foot_vert_vel_thresh,
                         foot_horiz_vel_k=foot_horiz_vel_k,
                     )
                     corrupt_mask = mask_L | mask_R
+
+                # 分析 False Negatives
+                name_norm = name_stem.replace("\\", "/")
+                if name_norm in gt_dict:
+                    gt_intervals, seq_len = gt_dict[name_norm]
+                    gt_mask = parse_intervals_to_mask(gt_intervals, motion.shape[1])
+                    fn_mask = gt_mask & ~corrupt_mask
+                    
+                    if fn_mask.any():
+                        fn_indices = np.where(fn_mask)[0]
+                        for idx in fn_indices:
+                            if mode == "original":
+                                fn_records.append({
+                                    "name": name_norm,
+                                    "frame": idx,
+                                    "v_L": debug["v_L_h"][idx],
+                                    "v_R": debug["v_R_h"][idx],
+                                    "thr_L": debug["thr_L"],
+                                    "thr_R": debug["thr_R"],
+                                    "support_L": debug["support_L"][idx],
+                                    "support_R": debug["support_R"][idx]
+                                })
+                            else:
+                                fn_records.append({
+                                    "name": name_norm,
+                                    "frame": idx,
+                                    "v_L": debug["v_L_h"][idx],
+                                    "v_R": debug["v_R_h"][idx],
+                                    "thr_vel": debug["thr_vel"]
+                                })
 
                 intervals_str = corrupt_frames_to_intervals(corrupt_mask)
                 mean_score = float(score.mean()) if score.size > 0 else 0.0
@@ -171,6 +204,16 @@ def run_batch_detect_foot_sliding(
                     )
 
                 sample_idx += 1
+
+    # 保存 FN 分析记录
+    if fn_records:
+        fn_csv_path = os.path.join(os.path.dirname(output_csv) or ".", "footsliding_fn_analysis.csv")
+        with open(fn_csv_path, "w", newline="", encoding="utf-8") as f:
+            if fn_records:
+                writer = csv.DictWriter(f, fieldnames=fn_records[0].keys())
+                writer.writeheader()
+                writer.writerows(fn_records)
+        print(f"FN 分析结果已保存到 {fn_csv_path}")
 
 
 def main() -> None:
