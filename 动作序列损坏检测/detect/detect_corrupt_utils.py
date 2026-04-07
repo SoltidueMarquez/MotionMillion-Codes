@@ -178,6 +178,7 @@ def compute_reconstruction_error(
             motion = pin_motion_to_origin(motion.clone(), mean, std)
             rec = pin_motion_to_origin(rec, mean, std)
 
+        # 计算重建前后的 MSE 误差
         err = torch.nn.functional.mse_loss(rec, motion, reduction=reduction)
     return err
 # endregion

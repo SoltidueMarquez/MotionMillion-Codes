@@ -53,7 +53,7 @@ HML_LEFT_LEG_JOINTS = [1, 4, 7, 10]   # left_hip, left_knee, left_ankle, left_fo
 HML_RIGHT_LEG_JOINTS = [2, 5, 8, 11]  # right_hip, right_knee, right_ankle, right_foot
 
 # CORRUPT_TYPES = ["jittering", "foot sliding", "over smooth", "drifting"]
-CORRUPT_TYPES = ["foot sliding"]
+CORRUPT_TYPES = ["drifting"]
 
 def _get_joint_indices_for_jittering() -> List[int]:
     """随机选择要施加 jittering 的关节子集 (对齐 StableMotion 逻辑)"""
@@ -169,23 +169,40 @@ def _apply_foot_sliding(
     aug_interval: int,
     aug_length: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """对根速度 (0:2) 在区间内施加缩放，模拟脚滑 (对齐 StableMotion)"""
+    """
+    对根速度 (0:2) 在区间内施加缩放，并叠加与当前速度同方向的固定最小偏移，
+    避免原速度接近 0 时仅缩放仍几乎为 0 导致脚滑检测漏检。
+    """
     scale = 0.1
+    # 与 drifting 中 root_drift_vel 量级一致的上界参考，使用固定最小偏移
+    min_offset = 0.025
+    vel_eps = 1e-6
     s, e = aug_interval, aug_interval + aug_length
     mlen = len(motion)
 
-    # 根速度 (0:2) 的缩放
+    # 缩放系数（逐帧随机 1.0~1.1）
     diag_vec = np.ones((mlen,), dtype=np.float32)
     diag_vec[s:e] += scale * np.random.random((aug_length,)).astype(np.float32)
-    
-    # 记录原始速度模长
-    old_vel = motion[s:e, IDX_ROOT_VEL]
+
+    # 损坏前根速度（用于统计与方向）
+    old_vel = motion[s:e, IDX_ROOT_VEL].astype(np.float32, copy=True)
     old_vel_norms = np.linalg.norm(old_vel, axis=1)
 
-    # 直接修改速度分量
+    # 每帧单位方向：与当前速度同向；近零则随机水平单位向量
+    norms_col = old_vel_norms.astype(np.float32)[:, np.newaxis]
+    norms_safe = np.maximum(norms_col, np.float32(vel_eps))
+    rnd = np.random.randn(aug_length, 2).astype(np.float32)
+    rnd_norm = np.linalg.norm(rnd, axis=1, keepdims=True)
+    rnd_norm = np.maximum(rnd_norm, np.float32(vel_eps))
+    rnd_unit = rnd / rnd_norm
+    mask_ok = (old_vel_norms >= vel_eps)[:, np.newaxis]
+    vel_dir = np.where(mask_ok, old_vel / norms_safe, rnd_unit)
+
+    # 先缩放整段序列的根速度
     motion[:, IDX_ROOT_VEL] *= diag_vec[:, None]
-    
-    # 记录修改后速度模长
+    # 再在损坏区间叠加同向固定最小偏移
+    motion[s:e, IDX_ROOT_VEL] += vel_dir * np.float32(min_offset)
+
     new_vel = motion[s:e, IDX_ROOT_VEL]
     new_vel_norms = np.linalg.norm(new_vel, axis=1)
 
@@ -196,18 +213,25 @@ def _apply_drifting(
     motion: np.ndarray,
     aug_interval: int,
     aug_length: int,
-) -> None:
-    """在区间内对根速度施加漂移速度 (对齐 StableMotion)"""
+) -> Tuple[np.ndarray, np.ndarray]:
+    """在区间内对根速度施加漂移速度 (对齐 StableMotion)，返回损坏前后根速度模长。"""
     s, e = aug_interval, aug_interval + aug_length
+    old_vel = motion[s:e, IDX_ROOT_VEL].astype(np.float32, copy=True)
+    old_vel_norms = np.linalg.norm(old_vel, axis=1)
+
     # 生成漂移速度方向和量 (参考 StableMotion)
     root_drift_dir = np.random.randn(1, 2).astype(np.float32) + np.random.randn(aug_length, 2).astype(np.float32) * 0.1
     root_drift_vel = np.random.random((aug_length, 1)).astype(np.float32) * 0.025
     root_drift_dir /= np.linalg.norm(root_drift_dir, keepdims=True)
     root_drift_vel = root_drift_vel * root_drift_dir
-    
+
     # 修正：在速度空间直接累加漂移速度 root_drift_vel
     # 在 StableMotion 中是 trans += cumsum(drift_vel)，等价于 vel += drift_vel
     motion[s:e, IDX_ROOT_VEL] += root_drift_vel
+
+    new_vel = motion[s:e, IDX_ROOT_VEL]
+    new_vel_norms = np.linalg.norm(new_vel, axis=1)
+    return old_vel_norms, new_vel_norms
 
 
 def pin_motion_to_origin(motion: np.ndarray) -> np.ndarray:
@@ -242,7 +266,7 @@ def corrupt_motion_vector272(
     aug_length: int,
     aug_type: str,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """对 motion 的指定区间施加指定类型损坏，原地修改。若为 footsliding，返回原始和损坏后速度。"""
+    """对 motion 的指定区间施加指定类型损坏，原地修改。foot sliding / drifting 返回损坏前后根速度模长。"""
     if aug_type == "jittering":
         _apply_jittering(motion, aug_interval, aug_length)
     elif aug_type == "over smooth":
@@ -250,7 +274,7 @@ def corrupt_motion_vector272(
     elif aug_type == "foot sliding":
         return _apply_foot_sliding(motion, aug_interval, aug_length)
     elif aug_type == "drifting":
-        _apply_drifting(motion, aug_interval, aug_length)
+        return _apply_drifting(motion, aug_interval, aug_length)
     else:
         raise NotImplementedError(f"Unknown aug_type: {aug_type}")
     return None
@@ -369,7 +393,8 @@ def run_generate(
     corrupt_entries: List[str] = []
     good_entries: List[str] = []
     gt_entries: List[Tuple[str, str, int]] = []  # (name, gt_intervals, seq_len)
-    footsliding_vel_records: List[Tuple[str, int, float, float]] = [] # (name, frame_idx, old_v, new_v)
+    footsliding_vel_records: List[Tuple[str, int, float, float]] = []  # (name, frame_idx, old_v, new_v)
+    drifting_vel_records: List[Tuple[str, int, float, float]] = []
 
     for fp in tqdm(files, desc="生成损坏数据"):
         try:
@@ -403,13 +428,17 @@ def run_generate(
             aug_length = min(mlen - 2, int(random.randint(5, min(50, mlen - 2)) * 5))
             aug_interval = random.randint(1, mlen - aug_length) # 1-based start in StableMotion logic
             
-            # 施加损坏并收集速度统计 (仅 footsliding)
+            # 施加损坏并收集速度统计 (foot sliding / drifting)
             res = corrupt_motion_vector272(motion_corrupt, aug_interval, aug_length, aug_type)
-            if aug_type == "foot sliding" and res is not None:
+            if res is not None:
                 old_v_norms, new_v_norms = res
                 stem = fp.stem
                 for i_offset, (ov, nv) in enumerate(zip(old_v_norms, new_v_norms)):
-                    footsliding_vel_records.append((stem, aug_interval + i_offset, float(ov), float(nv)))
+                    rec = (stem, aug_interval + i_offset, float(ov), float(nv))
+                    if aug_type == "foot sliding":
+                        footsliding_vel_records.append(rec)
+                    elif aug_type == "drifting":
+                        drifting_vel_records.append(rec)
             
             # 记录 GT 区间 (对齐 StableMotion det_mask 逻辑)
             # StableMotion: det_mask[aug_interval - 1: aug_interval + aug_length + 1] = 1
@@ -489,6 +518,16 @@ def run_generate(
             for rec in footsliding_vel_records:
                 writer.writerow(rec)
         print(f"  footsliding_vel_stats.csv -> {stats_csv_path}")
+
+    # 写入 drifting_vel_stats.csv，用于分析 drifting 根速度变化是否过小
+    if drifting_vel_records:
+        drift_stats_path = output_path / "drifting_vel_stats.csv"
+        with open(drift_stats_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["name", "frame_idx", "old_v", "new_v"])
+            for rec in drifting_vel_records:
+                writer.writerow(rec)
+        print(f"  drifting_vel_stats.csv -> {drift_stats_path}")
 
     print(f"完成: 生成 {len(good_entries)} 个完好副本、{len(corrupt_entries)} 个损坏文件")
     print(f"  good_list.txt -> {good_list_path}")
