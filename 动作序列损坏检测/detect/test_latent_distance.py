@@ -26,7 +26,7 @@ for _p in (_REPO_ROOT, _FEATURE_ROOT, _DETECT_DIR):
 # compute_quantization_error_per_frame 的核心思想：
 # 它只运行 Encoder 得到隐向量 z，然后运行 FSQ 量化器寻找最近的码字（code/level）
 # 计算 z 和 码字 之间的距离（残差 diff），最后将其映射回帧级别
-from detect_corrupt_utils import load_detector, compute_quantization_error_per_frame
+from detect_corrupt_utils import load_detector, compute_quantization_error_per_frame, visualize_motion_overlay_vector272
 
 
 # ==========================================
@@ -66,6 +66,7 @@ def parse_gt_csv(csv_path: str) -> dict:
                     intervals.append((s, e)) # 1-based inclusive
             gt_dict[name] = {
                 'intervals': intervals,
+                'intervals_str': intervals_str,
                 'seq_len': seq_len
             }
     return gt_dict
@@ -85,6 +86,8 @@ def main():
     parser.add_argument("--output-csv", type=str, required=True, help="输出最终统计分析结果和最佳阈值的 CSV 文件")
     parser.add_argument("--visualize-num", type=int, default=5, help="要生成并保存的曲线对比图的样本数量")
     parser.add_argument("--frame-level", action="store_true", help="表明本次实验是在帧级别进行检测评估")
+    parser.add_argument("--overlay", action="store_true", help="是否生成包含重叠动作和误差标注的可视化视频")
+    parser.add_argument("--vis-fps", type=int, default=30, help="重叠比较视频的帧率")
     args = parser.parse_args()
 
     # 2. 模型加载
@@ -93,6 +96,18 @@ def main():
     print(f"Loading model from {args.ckpt}...")
     net, _ = load_detector(args.ckpt, device=device)
     net.eval() # 必须设置为 evaluation 模式
+
+    # 准备数据归一化参数，以便视频可视化时反标准化还原动作真实尺寸
+    mean_path = _REPO_ROOT / 'dataset/MotionMillion/mean_std/vector_272/mean.npy'
+    std_path = _REPO_ROOT / 'dataset/MotionMillion/mean_std/vector_272/std.npy'
+    mean, std = None, None
+    if args.overlay:
+        if not mean_path.exists() or not std_path.exists():
+            print(f"警告：未找到 {mean_path} 或 {std_path}，overlay 视频可视化将被禁用。")
+            args.overlay = False
+        else:
+            mean = np.load(mean_path)
+            std = np.load(std_path)
 
     # 3. 准备数据列表与 Ground Truth (GT)
     good_files = load_file_list(args.good_list)
@@ -204,6 +219,28 @@ def main():
             # 预期现象：在黄色的高亮区域内，红线（err_corrupt）应该会产生非常明显的陡增（Spike/Peak）
             for s, e in intervals:
                 plt.axvspan(s-1, e-1, color='yellow', alpha=0.3, label='GT Corrupt Interval' if s == intervals[0][0] else "")
+            
+            # 计算两条曲线的重叠区间 (设定容忍度 tol)
+            tol = 0.05
+            overlap_mask = np.abs(err_good - err_corrupt) < tol
+            
+            # 将 overlap_mask 转换为连续的帧区间 (0-based)
+            overlap_intervals = []
+            in_overlap = False
+            start_overlap = 0
+            for t_idx in range(T):
+                if overlap_mask[t_idx] and not in_overlap:
+                    in_overlap = True
+                    start_overlap = t_idx
+                elif not overlap_mask[t_idx] and in_overlap:
+                    in_overlap = False
+                    overlap_intervals.append((start_overlap, t_idx - 1))
+            if in_overlap:
+                overlap_intervals.append((start_overlap, T - 1))
+            
+            # 使用浅绿色高亮标出重叠或近乎重叠的区间
+            for i_ov, (s_ov, e_ov) in enumerate(overlap_intervals):
+                plt.axvspan(s_ov, e_ov, color='green', alpha=0.2, label='Overlap (Missed) Interval' if i_ov == 0 else "")
                 
             plt.title(f"Latent Quantization Error (Distance) - {Path(corrupt_rel_path).stem}")
             plt.xlabel("Frame")
@@ -212,9 +249,69 @@ def main():
             plt.grid(True, linestyle='--', alpha=0.5)
             plt.tight_layout()
             
-            save_path = vis_dir / f"latent_dist_{Path(corrupt_rel_path).stem}.png"
+            # 使用序列的文件名作为子文件夹名称
+            seq_vis_dir = vis_dir / Path(corrupt_rel_path).stem
+            seq_vis_dir.mkdir(parents=True, exist_ok=True)
+            
+            save_path = seq_vis_dir / f"latent_dist_{Path(corrupt_rel_path).stem}.png"
             plt.savefig(save_path, dpi=150)
             plt.close()
+
+            # =========================================================
+            # 视频渲染部分：生成并保存 overlay 重叠动作视频
+            # =========================================================
+            if args.overlay and mean is not None and std is not None:
+                video_save_path = str(seq_vis_dir / f"overlay_{Path(corrupt_rel_path).stem}.mp4")
+                
+                # 反标准化动作序列
+                good_denorm = good_motion * std + mean
+                corrupt_denorm = corrupt_motion * std + mean
+                
+                # 构造成 (T, 1) 形状的误差数组，以便传递给支持任意部位数量的渲染函数
+                total_errors_2d = err_corrupt.reshape(-1, 1)
+                
+                # 提取原始带类型的 intervals 字符串
+                intervals_str = ""
+                if corrupt_rel_path in gt_info:
+                    intervals_str = gt_info[corrupt_rel_path].get('intervals_str', "")
+                else:
+                    # Fallback
+                    stem = Path(corrupt_rel_path).stem
+                    for k, v in gt_info.items():
+                        if Path(k).stem == stem:
+                            intervals_str = v.get('intervals_str', "")
+                            break
+                
+                visualize_motion_overlay_vector272(
+                    good_denorm, corrupt_denorm, video_save_path,
+                    per_frame_errors=total_errors_2d,
+                    fps=args.vis_fps,
+                    title="Normal (Blue) vs Corrupted (Red)",
+                    gt_corrupt_mask=gt_mask,
+                    detected_corrupt_mask=None,
+                    gt_intervals_str=intervals_str,
+                    part_names=["Total Quantization Error"],
+                    overlay_title="Quantization Error"
+                )
+
+            # =========================================================
+            # 逐帧数据导出部分：将分析参数写入 CSV 文件
+            # =========================================================
+            csv_save_path = seq_vis_dir / f"frame_stats_{Path(corrupt_rel_path).stem}.csv"
+            with open(csv_save_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # 写入表头
+                writer.writerow(["frame_idx", "err_good", "err_corrupt", "is_gt_corrupt", "is_overlap"])
+                
+                # 逐行写入每一帧的数据
+                for t_idx in range(T):
+                    writer.writerow([
+                        t_idx,
+                        f"{err_good[t_idx]:.6f}",
+                        f"{err_corrupt[t_idx]:.6f}",
+                        1 if gt_mask[t_idx] else 0,
+                        1 if overlap_mask[t_idx] else 0
+                    ])
 
     # =========================================================
     # 全局数据分析与最佳阈值 (Optimal Threshold) 搜索
@@ -245,6 +342,9 @@ def main():
         print(f"ROC AUC: {roc_auc:.4f}")
     else:
         best_threshold = 0.0
+        best_f1 = 0.0
+        best_precision = 0.0
+        best_recall = 0.0
         roc_auc = 0.0
         print("未找到任何含有 GT 损坏的帧，无法计算评价指标。")
 

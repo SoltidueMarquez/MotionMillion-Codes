@@ -268,6 +268,15 @@ def main() -> None:
         default="vector_272",
         help="运动类型，用于 mean/std 路径",
     )
+    # mean/std 目录：优先使用用户显式指定路径；不指定时回退到默认推断逻辑
+    parser.add_argument(
+        "--mean-std-dir",
+        "--normalizer-dir",
+        dest="mean_std_dir",
+        type=str,
+        default=None,
+        help="指定 mean/std 目录（包含 mean.npy 与 std.npy）",
+    )
     # 长度对齐单位：序列长度会对齐到 unit_length 的整数倍（与 Encoder 的 stride_t 相关）
     parser.add_argument(
         "--unit-length",
@@ -363,6 +372,7 @@ def main() -> None:
         gt_csv_path=args.gt_csv,
         overlay=args.overlay,
         pin_to_origin=args.pin_to_origin,
+        mean_std_dir=args.mean_std_dir,
         motion_type=args.motion_type,
         unit_length=args.unit_length,
         min_length=args.min_length,

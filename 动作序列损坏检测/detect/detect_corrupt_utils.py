@@ -469,7 +469,7 @@ def compute_quantization_error_per_frame(
             half_width = quantizer._levels // 2
             codes_level = codes * half_width
             diff = z_bounded - codes_level
-            err_token = (diff * diff).sum(dim=-1)  # (b, n), n = T/2
+            err_token = (diff * diff).sum(dim=(-1, -2))  # (b, n), n = T/2
 
         # 映射到帧级：每个 token 对应 2 帧
         err = err_token.repeat_interleave(2, dim=1)  # (b, 2*n)
@@ -553,12 +553,13 @@ def _draw_part_errors_overlay(
     errors: np.ndarray,
     colors: Optional[List[Tuple[int, int, int]]] = None,
     part_names: List[str] = ["h1", "h2L", "h2R", "h3L", "h3R", "h4", "h"],
+    title_text: str = "各部位重构误差 (MSE)",
 ) -> np.ndarray:
     """
     在帧的右上角显示各部位的重构误差。
     frame: (H, W, 3) or (H, W, 4)
-    errors: (7,) 每个部位的误差值
-    colors: (7,) 每个部位对应的颜色 (R, G, B)，若为 None 则默认白色
+    errors: 误差值数组
+    colors: 每个部位对应的颜色 (R, G, B)，若为 None 则默认白色
     """
     try:
         import cv2
@@ -570,7 +571,7 @@ def _draw_part_errors_overlay(
     # 在右上角绘制一个半透明背景
     margin = 10
     line_h = 25
-    rect_w = 200 # 稍微加宽以适应中文
+    rect_w = 280 # 加宽以适应较长文字
     rect_h = line_h * (len(part_names) + 1) + margin
     
     top_left = (w - rect_w - margin, margin)
@@ -606,7 +607,7 @@ def _draw_part_errors_overlay(
         font = ImageFont.load_default()
 
     # 绘制标题
-    draw.text((top_left[0] + 5, top_left[1] + 5), "各部位重构误差 (MSE)", font=font, fill=(220, 220, 220))
+    draw.text((top_left[0] + 5, top_left[1] + 5), title_text, font=font, fill=(220, 220, 220))
     
     # 中文名称映射
     CHINESE_NAMES = {
@@ -641,6 +642,8 @@ def visualize_motion_overlay_vector272(
     gt_corrupt_mask: Optional[np.ndarray] = None,
     detected_corrupt_mask: Optional[np.ndarray] = None,
     gt_intervals_str: Optional[str] = None,
+    part_names: List[str] = ["h1", "h2L", "h2R", "h3L", "h3R", "h4", "h"],
+    overlay_title: str = "各部位重构误差 (MSE)",
 ) -> bool:
     """
     将原始动作与重建动作重叠可视化。
@@ -707,13 +710,13 @@ def visualize_motion_overlay_vector272(
             
             # 让视角跟随原始动作的根节点，实现自动缩放和中心化
             root = joints_orig[t, 0]
-            # view_radius 决定了缩放程度。2.0 米半径能看清全身动作
-            view_radius = 2.0
+            # view_radius 决定了缩放程度。减小半径以拉近视角
+            view_radius = 1.0
             
             ax.set_xlim3d([root[0] - view_radius, root[0] + view_radius])
             ax.set_ylim3d([root[1] - view_radius, root[1] + view_radius])
-            # 假设 Z 是高度方向
-            ax.set_zlim3d([0, view_radius * 2])
+            # 假设 Z 是高度方向，固定一个适合人体的高度范围
+            ax.set_zlim3d([0, 2.0])
             
             ax.view_init(elev=20, azim=-90)
             ax.set_title(title)
@@ -776,7 +779,10 @@ def visualize_motion_overlay_vector272(
                     else:
                         colors.append(WHITE)
                 
-                frame = _draw_part_errors_overlay(frame, curr_errors, colors=colors)
+                frame = _draw_part_errors_overlay(
+                    frame, curr_errors, colors=colors,
+                    part_names=part_names, title_text=overlay_title
+                )
             
             frames.append(frame)
 

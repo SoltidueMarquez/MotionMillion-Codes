@@ -53,7 +53,7 @@ HML_LEFT_LEG_JOINTS = [1, 4, 7, 10]   # left_hip, left_knee, left_ankle, left_fo
 HML_RIGHT_LEG_JOINTS = [2, 5, 8, 11]  # right_hip, right_knee, right_ankle, right_foot
 
 # CORRUPT_TYPES = ["jittering", "foot sliding", "over smooth", "drifting"]
-CORRUPT_TYPES = ["drifting"]
+CORRUPT_TYPES = ["jittering"]
 
 def _get_joint_indices_for_jittering() -> List[int]:
     """随机选择要施加 jittering 的关节子集 (对齐 StableMotion 逻辑)"""

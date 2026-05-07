@@ -115,8 +115,19 @@ def encode_world_joints_and_rotations_to_vector272(
     if t > 1:
         local_vel[t - 1] = local_vel[t - 2]
 
-    R_stored = global_rot_mats.copy()
-    R_stored[:, 0] = np.matmul(R_cum, global_rot_mats[:, 0])
+    # 将全局旋转转换为局部旋转 (Local Rotations)
+    R_local = np.zeros_like(global_rot_mats)
+    for j in range(NJOINT):
+        p = SMPL22_PARENTS[j]
+        if p < 0:
+            R_local[:, j] = global_rot_mats[:, j]
+        else:
+            # R_local = R_parent^T @ R_global
+            R_local[:, j] = np.matmul(np.transpose(global_rot_mats[:, p], (0, 2, 1)), global_rot_mats[:, j])
+            
+    R_stored = R_local.copy()
+    # 根节点需要额外减去 yaw 旋转
+    R_stored[:, 0] = np.matmul(R_cum, R_local[:, 0])
 
     out = np.zeros((t, 272), dtype=np.float32)
     out[:, 0] = feat_vx.astype(np.float32)
